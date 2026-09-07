@@ -19,7 +19,9 @@ The architecture supports dual comparative implementations:
   - Bidirectional Cross-Modal Attention Fusion.
   - Learnable **`[CLS]` Token** prepending to explicitly model global conversational sentiment.
   - Saved weights: `models/dual_transformer_v2_weights.pt` (and `models/dual_transformer_weights.pt`).
-- **Hardware Acceleration:** Native Apple Silicon GPU acceleration via PyTorch MPS backend (`torch.device("mps")`).
+- **Hardware Acceleration:** Native Apple Silicon GPU acceleration via PyTorch MPS backend (`torch.device("mps")`), falling back to `cuda` then `cpu` on other machines.
+- **Multimodal Input Ingestion (`app.py`):** the Streamlit dashboard accepts three input sources — file upload (`mp3`/`wav`/`m4a`/`flac`/`aac`/`opus`/`ogg`/`mp4`/`webm`/`mov`), live browser microphone recording (`st.audio_input`), or a YouTube URL — all normalized to 16kHz mono WAV via `ffmpeg` before running the same Whisper → WavLM → MPNet → V1/V2 pipeline.
+- **Speaker Diarization (heuristic):** dialogue segments are grouped into `Speaker 1` / `Speaker 2` / etc. by clustering the per-segment WavLM embeddings (KMeans, auto-selecting cluster count via silhouette score). This reuses embeddings already computed for CSAT inference — no separate diarization model or extra dependency — so it's an approximate speaker-turn heuristic, not verified speaker identity.
 
 ## 2. Directory Structure
 The repository has been structured according to strict software engineering standards:
@@ -88,6 +90,7 @@ Weights will be saved to `models/dual_transformer_v1_weights.pt` and `models/dua
   ```bash
   streamlit run app.py
   ```
+  Accepts an uploaded audio file, a live mic recording, or a YouTube URL; plays back the analyzed clip inline; shows live elapsed-time progress during transcription; and labels transcript turns by speaker (heuristic clustering, see above).
 
 ## 4. Current Status & Verification
 - **4 CSAT Categories:**
