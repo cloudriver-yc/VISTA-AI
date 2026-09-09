@@ -207,12 +207,25 @@ class DualTransformerClassifier(nn.Module):
 
             t_out = fusion_info["t_out"] # (B, S, d_model)
             a_out = fusion_info["a_out"] # (B, S, d_model)
-            t_norm = torch.norm(t_out, p=2, dim=-1) # (B, S)
-            a_norm = torch.norm(a_out, p=2, dim=-1) # (B, S)
-            mean_t = t_norm.mean(dim=-1, keepdim=True)
-            mean_a = a_norm.mean(dim=-1, keepdim=True)
-            text_ratio = (mean_t / torch.clamp(mean_t + mean_a, min=1e-9)).squeeze(-1)
+
+            # Compute modality contribution via fuse_proj linear layer weights and activations
+            w = self.cross_modal_fusion.fuse_proj[0].weight # (d_model, 2 * d_model)
+            w_t = w[:, :self.d_model]
+            w_a = w[:, self.d_model:]
+            h_t = torch.matmul(t_out, w_t.t()) # (B, S, d_model)
+            h_a = torch.matmul(a_out, w_a.t()) # (B, S, d_model)
+            norm_ht = torch.norm(h_t, p=2, dim=-1).mean(dim=-1, keepdim=True)
+            norm_ha = torch.norm(h_a, p=2, dim=-1).mean(dim=-1, keepdim=True)
+            text_ratio = (norm_ht / torch.clamp(norm_ht + norm_ha, min=1e-9)).squeeze(-1)
             audio_ratio = 1.0 - text_ratio
+
+            # Real acoustic tension & text embedding norms from input features
+            raw_a_norm = torch.norm(audio_embeds, p=2, dim=-1) # (B, S)
+            raw_t_norm = torch.norm(text_embeds, p=2, dim=-1) # (B, S)
+
+            # Cross-modal directional discrepancy between projected modalities
+            cos_sim = F.cosine_similarity(t_proj, a_proj, dim=-1) # (B, S)
+            cross_mismatch = (1.0 - cos_sim) / 2.0 # [0, 1]
 
             return {
                 "logits": logits,
@@ -221,9 +234,9 @@ class DualTransformerClassifier(nn.Module):
                 "turn_saliency": turn_saliency.squeeze(0),
                 "text_ratio": float(text_ratio[0].item()),
                 "audio_ratio": float(audio_ratio[0].item()),
-                "text_norms": t_norm.squeeze(0),
-                "audio_norms": a_norm.squeeze(0),
-                "turn_cross_mismatch": (torch.abs(t_norm - a_norm) / torch.clamp(t_norm + a_norm, min=1e-9)).squeeze(0)
+                "text_norms": raw_t_norm.squeeze(0),
+                "audio_norms": raw_a_norm.squeeze(0),
+                "turn_cross_mismatch": cross_mismatch.squeeze(0)
             }
 
         return logits, None, None
@@ -362,12 +375,25 @@ class EnhancedDualTransformerClassifier(nn.Module):
 
             t_out = fusion_info["t_out"] # (B, S, d_model)
             a_out = fusion_info["a_out"] # (B, S, d_model)
-            t_norm = torch.norm(t_out, p=2, dim=-1) # (B, S)
-            a_norm = torch.norm(a_out, p=2, dim=-1) # (B, S)
-            mean_t = t_norm.mean(dim=-1, keepdim=True)
-            mean_a = a_norm.mean(dim=-1, keepdim=True)
-            text_ratio = (mean_t / torch.clamp(mean_t + mean_a, min=1e-9)).squeeze(-1)
+
+            # Compute modality contribution via fuse_proj linear layer weights and activations
+            w = self.cross_modal_fusion.fuse_proj[0].weight # (d_model, 2 * d_model)
+            w_t = w[:, :self.d_model]
+            w_a = w[:, self.d_model:]
+            h_t = torch.matmul(t_out, w_t.t()) # (B, S, d_model)
+            h_a = torch.matmul(a_out, w_a.t()) # (B, S, d_model)
+            norm_ht = torch.norm(h_t, p=2, dim=-1).mean(dim=-1, keepdim=True)
+            norm_ha = torch.norm(h_a, p=2, dim=-1).mean(dim=-1, keepdim=True)
+            text_ratio = (norm_ht / torch.clamp(norm_ht + norm_ha, min=1e-9)).squeeze(-1)
             audio_ratio = 1.0 - text_ratio
+
+            # Real acoustic tension & text embedding norms from input features
+            raw_a_norm = torch.norm(audio_embeds, p=2, dim=-1) # (B, S)
+            raw_t_norm = torch.norm(text_embeds, p=2, dim=-1) # (B, S)
+
+            # Cross-modal directional discrepancy between projected modalities
+            cos_sim = F.cosine_similarity(t_proj, a_proj, dim=-1) # (B, S)
+            cross_mismatch = (1.0 - cos_sim) / 2.0 # [0, 1]
 
             return {
                 "logits": logits,
@@ -376,9 +402,9 @@ class EnhancedDualTransformerClassifier(nn.Module):
                 "turn_saliency": turn_saliency.squeeze(0),
                 "text_ratio": float(text_ratio[0].item()),
                 "audio_ratio": float(audio_ratio[0].item()),
-                "text_norms": t_norm.squeeze(0),
-                "audio_norms": a_norm.squeeze(0),
-                "turn_cross_mismatch": (torch.abs(t_norm - a_norm) / torch.clamp(t_norm + a_norm, min=1e-9)).squeeze(0)
+                "text_norms": raw_t_norm.squeeze(0),
+                "audio_norms": raw_a_norm.squeeze(0),
+                "turn_cross_mismatch": cross_mismatch.squeeze(0)
             }
 
         return logits, None, None

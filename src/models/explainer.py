@@ -102,8 +102,10 @@ class MultimodalExplainer:
         polite_words = any(w in lower_t for w in ["thank", "thanks", "great", "wonderful", "perfect", "good", "welcome", "appreciate"])
         negative_words = any(w in lower_t for w in ["error", "not available", "failed", "cancel", "useless", "rubbish", "refuse", "blocked", "reject", "sue", "court"])
 
-        if acoustic_norm > 2.5 or (acoustic_norm > 2.2 and negative_words):
+        if acoustic_norm > 3.2 or (acoustic_norm > 2.3 and negative_words):
             return "🔥 Explosive Anger / Shouting"
+        elif acoustic_norm > 2.5 and polite_words:
+            return "🎉 Enthusiastic / Strong Agreement"
         elif polite_words and (mismatch > 0.45 or acoustic_norm < 1.7):
             return "❄️ Sarcasm / Polite Dissatisfaction"
         elif negative_words and acoustic_norm < 2.0:
@@ -131,13 +133,13 @@ class MultimodalExplainer:
         polite_closing = any(w in last_turns_text for w in ["thank you", "thanks", "bye", "good day"])
 
         closing_nuance = ""
-        if polite_closing and predicted_label in ["Unsatisfied", "Very Satisfied"]:
+        if polite_closing and predicted_label in ["Unsatisfied", "Very Unsatisfied"]:
             closing_nuance = (
                 " Notably, although the call concluded with superficial courtesy or sign-offs ('thank you'), "
                 "the model's sequence attention prioritized earlier critical turning points where unresolved friction occurred, "
                 "correctly preventing polite closing words from overriding the substantive outcome."
             )
-        elif predicted_label in ["Satisfied", "Very Unsatisfied"]:
+        elif predicted_label in ["Satisfied", "Very Satisfied"]:
             closing_nuance = " The interaction exhibited positive resolution signals and mutual consensus without critical conversational breakdown."
 
         rationale = (
