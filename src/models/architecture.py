@@ -25,7 +25,7 @@ class CrossModalAttention(nn.Module):
             nn.Dropout(dropout)
         )
 
-    def forward(self, text_proj, audio_proj):
+    def forward(self, text_proj, audio_proj, return_details=False):
         # text_proj, audio_proj: (Batch, Segments, d_model)
         t_attended, _ = self.text_cross_attn(query=text_proj, key=audio_proj, value=audio_proj)
         t_out = self.norm_t(text_proj + t_attended)
@@ -34,7 +34,10 @@ class CrossModalAttention(nn.Module):
         a_out = self.norm_a(audio_proj + a_attended)
         
         fused = torch.cat([t_out, a_out], dim=-1) # (Batch, Segments, 2 * d_model)
-        return self.fuse_proj(fused) # (Batch, Segments, d_model)
+        out = self.fuse_proj(fused) # (Batch, Segments, d_model)
+        if return_details:
+            return out, {"t_out": t_out, "a_out": a_out}
+        return out
 
 
 class SinusoidalPositionalEncoding(nn.Module):
@@ -136,12 +139,13 @@ class DualTransformerClassifier(nn.Module):
             nn.Linear(128, num_classes)
         )
 
-    def forward(self, text_embeds, audio_embeds, padding_mask=None):
+    def forward(self, text_embeds, audio_embeds, padding_mask=None, return_xai=False):
         """
         Inputs:
         - text_embeds: (Batch, Segments, 768)
         - audio_embeds: (Batch, Segments, 768)
         - padding_mask: (Batch, Segments) - True for padded positions
+        - return_xai: (bool) - if True, returns dictionary with attention saliency and modality attribution
         """
         B, S, _ = text_embeds.size()
         
@@ -150,25 +154,78 @@ class DualTransformerClassifier(nn.Module):
         a_proj = self.audio_proj(audio_embeds) # (B, S, d_model)
         
         # 2. Cross-Modal Fusion
-        fused = self.cross_modal_fusion(t_proj, a_proj) # (B, S, d_model)
+        if return_xai:
+            fused, fusion_info = self.cross_modal_fusion(t_proj, a_proj, return_details=True)
+        else:
+            fused = self.cross_modal_fusion(t_proj, a_proj)
         
         # 3. Add positional embeddings (turn progression)
         h = self.pos_encoder(fused)
         
         # 4. Process conversational dynamics across turns
+        last_attn = None
+        if return_xai:
+            curr_h = h
+            for layer in self.sequence_transformer.layers:
+                attn_out, attn_weights = layer.self_attn(
+                    curr_h, curr_h, curr_h,
+                    key_padding_mask=padding_mask,
+                    need_weights=True,
+                    average_attn_weights=True
+                )
+                curr_h = layer.norm1(curr_h + layer.dropout1(attn_out))
+                ff_out = layer.linear2(layer.dropout(layer.activation(layer.linear1(curr_h))))
+                curr_h = layer.norm2(curr_h + layer.dropout2(ff_out))
+                last_attn = attn_weights
+            seq_out = curr_h
+        else:
+            if padding_mask is not None:
+                seq_out = self.sequence_transformer(h, src_key_padding_mask=padding_mask)
+            else:
+                seq_out = self.sequence_transformer(h)
+
         if padding_mask is not None:
-            seq_out = self.sequence_transformer(h, src_key_padding_mask=padding_mask)
-            # Masked pooling
             mask_expanded = (~padding_mask).unsqueeze(-1).float() # (B, S, 1)
             sum_embeddings = torch.sum(seq_out * mask_expanded, dim=1)
             sum_mask = torch.clamp(mask_expanded.sum(dim=1), min=1e-9)
             pooled = sum_embeddings / sum_mask # (B, d_model)
         else:
-            seq_out = self.sequence_transformer(h)
             pooled = seq_out.mean(dim=1) # (B, d_model)
             
         # 5. CSAT Logits
         logits = self.classifier(pooled) # (B, num_classes)
+        
+        if return_xai:
+            probs = F.softmax(logits, dim=-1)
+            if last_attn is not None:
+                raw_saliency = last_attn.mean(dim=1) # (B, S)
+                if padding_mask is not None:
+                    raw_saliency = raw_saliency.masked_fill(padding_mask, 0.0)
+                turn_saliency = raw_saliency / torch.clamp(raw_saliency.sum(dim=-1, keepdim=True), min=1e-9)
+            else:
+                turn_saliency = torch.ones((B, S), device=logits.device) / S
+
+            t_out = fusion_info["t_out"] # (B, S, d_model)
+            a_out = fusion_info["a_out"] # (B, S, d_model)
+            t_norm = torch.norm(t_out, p=2, dim=-1) # (B, S)
+            a_norm = torch.norm(a_out, p=2, dim=-1) # (B, S)
+            mean_t = t_norm.mean(dim=-1, keepdim=True)
+            mean_a = a_norm.mean(dim=-1, keepdim=True)
+            text_ratio = (mean_t / torch.clamp(mean_t + mean_a, min=1e-9)).squeeze(-1)
+            audio_ratio = 1.0 - text_ratio
+
+            return {
+                "logits": logits,
+                "probabilities": probs,
+                "predicted_class": logits.argmax(dim=-1).item(),
+                "turn_saliency": turn_saliency.squeeze(0),
+                "text_ratio": float(text_ratio[0].item()),
+                "audio_ratio": float(audio_ratio[0].item()),
+                "text_norms": t_norm.squeeze(0),
+                "audio_norms": a_norm.squeeze(0),
+                "turn_cross_mismatch": (torch.abs(t_norm - a_norm) / torch.clamp(t_norm + a_norm, min=1e-9)).squeeze(0)
+            }
+
         return logits, None, None
 
 
@@ -231,12 +288,13 @@ class EnhancedDualTransformerClassifier(nn.Module):
             nn.Linear(128, num_classes)
         )
 
-    def forward(self, text_embeds, audio_embeds, padding_mask=None):
+    def forward(self, text_embeds, audio_embeds, padding_mask=None, return_xai=False):
         """
         Inputs:
         - text_embeds: (Batch, Segments, 768)
         - audio_embeds: (Batch, Segments, 768)
         - padding_mask: (Batch, Segments) - True for padded positions
+        - return_xai: (bool) - if True, returns dictionary with attention saliency and modality attribution
         """
         B, S, _ = text_embeds.size()
         
@@ -245,7 +303,10 @@ class EnhancedDualTransformerClassifier(nn.Module):
         a_proj = self.audio_proj(audio_embeds) # (B, S, d_model)
         
         # 2. Cross-Modal Fusion
-        fused = self.cross_modal_fusion(t_proj, a_proj) # (B, S, d_model)
+        if return_xai:
+            fused, fusion_info = self.cross_modal_fusion(t_proj, a_proj, return_details=True)
+        else:
+            fused = self.cross_modal_fusion(t_proj, a_proj)
         
         # 3. Prepend [CLS] token: (B, 1 + S, d_model)
         cls_tokens = self.cls_token.expand(B, -1, -1)
@@ -258,15 +319,68 @@ class EnhancedDualTransformerClassifier(nn.Module):
         if padding_mask is not None:
             cls_mask = torch.zeros((B, 1), dtype=torch.bool, device=padding_mask.device)
             mask_with_cls = torch.cat([cls_mask, padding_mask], dim=1)
-            seq_out = self.sequence_transformer(h, src_key_padding_mask=mask_with_cls)
         else:
-            seq_out = self.sequence_transformer(h)
+            mask_with_cls = None
+
+        last_attn = None
+        if return_xai:
+            curr_h = h
+            for layer in self.sequence_transformer.layers:
+                attn_out, attn_weights = layer.self_attn(
+                    curr_h, curr_h, curr_h,
+                    key_padding_mask=mask_with_cls,
+                    need_weights=True,
+                    average_attn_weights=True
+                )
+                curr_h = layer.norm1(curr_h + layer.dropout1(attn_out))
+                ff_out = layer.linear2(layer.dropout(layer.activation(layer.linear1(curr_h))))
+                curr_h = layer.norm2(curr_h + layer.dropout2(ff_out))
+                last_attn = attn_weights
+            seq_out = curr_h
+        else:
+            if mask_with_cls is not None:
+                seq_out = self.sequence_transformer(h, src_key_padding_mask=mask_with_cls)
+            else:
+                seq_out = self.sequence_transformer(h)
             
         # 6. Extract [CLS] token representation (index 0)
         cls_rep = seq_out[:, 0, :] # (B, d_model)
         
         # 7. CSAT Classification
         logits = self.classifier(cls_rep)
+
+        if return_xai:
+            probs = F.softmax(logits, dim=-1)
+            # CLS token is at index 0, so its attention over the turns is last_attn[:, 0, 1:]
+            if last_attn is not None:
+                raw_saliency = last_attn[:, 0, 1:] # (B, S)
+                if padding_mask is not None:
+                    raw_saliency = raw_saliency.masked_fill(padding_mask, 0.0)
+                turn_saliency = raw_saliency / torch.clamp(raw_saliency.sum(dim=-1, keepdim=True), min=1e-9)
+            else:
+                turn_saliency = torch.ones((B, S), device=logits.device) / S
+
+            t_out = fusion_info["t_out"] # (B, S, d_model)
+            a_out = fusion_info["a_out"] # (B, S, d_model)
+            t_norm = torch.norm(t_out, p=2, dim=-1) # (B, S)
+            a_norm = torch.norm(a_out, p=2, dim=-1) # (B, S)
+            mean_t = t_norm.mean(dim=-1, keepdim=True)
+            mean_a = a_norm.mean(dim=-1, keepdim=True)
+            text_ratio = (mean_t / torch.clamp(mean_t + mean_a, min=1e-9)).squeeze(-1)
+            audio_ratio = 1.0 - text_ratio
+
+            return {
+                "logits": logits,
+                "probabilities": probs,
+                "predicted_class": logits.argmax(dim=-1).item(),
+                "turn_saliency": turn_saliency.squeeze(0),
+                "text_ratio": float(text_ratio[0].item()),
+                "audio_ratio": float(audio_ratio[0].item()),
+                "text_norms": t_norm.squeeze(0),
+                "audio_norms": a_norm.squeeze(0),
+                "turn_cross_mismatch": (torch.abs(t_norm - a_norm) / torch.clamp(t_norm + a_norm, min=1e-9)).squeeze(0)
+            }
+
         return logits, None, None
 
 

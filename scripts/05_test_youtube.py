@@ -18,6 +18,8 @@ from sentence_transformers import SentenceTransformer
 # Add src to path so we can import architecture
 sys.path.append(os.path.abspath("src"))
 from models.architecture import DualTransformerClassifier, EnhancedDualTransformerClassifier
+from models.explainer import MultimodalExplainer
+
 
 
 def main():
@@ -137,27 +139,34 @@ def main():
     
     # 4. Run Both Models Concurrently with Benchmarking
     print("\n4. Running Side-by-Side Inference (V1 Baseline vs. V2 Upgraded)...")
+    explainer = MultimodalExplainer()
     
-    # V1 Inference
+    # V1 Inference with XAI
     t0 = time.perf_counter()
     with torch.no_grad():
-        logits_v1, _, _ = model_v1(chunked_text_tensor, audio_tensor)
-        probs_v1 = torch.nn.functional.softmax(logits_v1, dim=1)[0]
+        xai_v1 = model_v1(chunked_text_tensor, audio_tensor, return_xai=True)
+        logits_v1 = xai_v1["logits"]
+        probs_v1 = xai_v1["probabilities"][0]
     t_v1 = (time.perf_counter() - t0) * 1000
     
-    # V2 Inference
+    # V2 Inference with XAI
     t0 = time.perf_counter()
     with torch.no_grad():
-        logits_v2, _, _ = model_v2(chunked_text_tensor, audio_tensor)
-        probs_v2 = torch.nn.functional.softmax(logits_v2, dim=1)[0]
+        xai_v2 = model_v2(chunked_text_tensor, audio_tensor, return_xai=True)
+        logits_v2 = xai_v2["logits"]
+        probs_v2 = xai_v2["probabilities"][0]
     t_v2 = (time.perf_counter() - t0) * 1000
     
     classes = ["Very Unsatisfied", "Unsatisfied", "Satisfied", "Very Satisfied"]
-    pred_v1_idx = torch.argmax(probs_v1).item()
-    pred_v2_idx = torch.argmax(probs_v2).item()
+    pred_v1_idx = xai_v1["predicted_class"]
+    pred_v2_idx = xai_v2["predicted_class"]
     
     pred_v1 = classes[pred_v1_idx]
     pred_v2 = classes[pred_v2_idx]
+    
+    # Generate XAI explanations
+    expl_v1 = explainer.explain(xai_v1, chunk_debug_stats, top_k=3)
+    expl_v2 = explainer.explain(xai_v2, chunk_debug_stats, top_k=3)
     
     # --- PRINT COMPARATIVE RESULTS TABLE ---
     print("\n" + "=" * 80)
@@ -177,6 +186,22 @@ def main():
     print(f"{'Inference Latency:':<22} | {t_v1:15.2f}ms | {t_v2:15.2f}ms | {t_v2 - t_v1:+6.2f}ms")
     print("=" * 80)
     
+    # --- EXPLAINABLE AI (XAI) DECISION ATTRIBUTION ---
+    print("\n" + "=" * 80)
+    print("🔍 EXPLAINABLE AI (XAI): WHY DID THE MODEL MAKE THIS DECISION?")
+    print("=" * 80)
+    print(f"• Modality Attribution (V2):    Text Semantics: {expl_v2['modality_attribution']['text_influence_pct']}% | Acoustic Prosody: {expl_v2['modality_attribution']['audio_influence_pct']}%")
+    print(f"• Primary Decision Driver:      {expl_v2['modality_attribution']['dominant_modality']}")
+    print("\nTop Pivotal Dialogue Turns (Highest Decision Influence):")
+    print(f"{'Turn':<5} | {'Timestamp':<15} | {'Saliency':<10} | {'Tone Diagnosis':<30} | {'Text Content'}")
+    print("-" * 80)
+    for pt in expl_v2["top_pivotal_turns"]:
+        print(f"{pt['turn_index']:<5} | {pt['timestamp']:<15} | {pt['saliency_pct']:6.2f}%    | {pt['tone_diagnosis']:<30} | {pt['text'][:45]}")
+        
+    print("\n📖 Executive Decision Audit:")
+    print(f"  {expl_v2['narrative_rationale']}")
+    print("=" * 80)
+    
     # --- DEEP MULTIMODAL DEBUG INFO ---
     print("\n" + "=" * 80)
     print("🔬 DEEP MULTIMODAL DIAGNOSTICS & DEBUG TELEMETRY")
@@ -191,16 +216,6 @@ def main():
     print(f"• V2 Raw Output Logits:          {[round(x, 4) for x in logits_v2[0].tolist()]}")
     print(f"• V1 Prediction Confidence:      {probs_v1[pred_v1_idx].item()*100:.2f}% ({pred_v1})")
     print(f"• V2 Prediction Confidence:      {probs_v2[pred_v2_idx].item()*100:.2f}% ({pred_v2})")
-    print("=" * 80)
-    
-    print("\nTop 5 Dialogue Segments Sample Diagnostics:")
-    print(f"{'#':<3} | {'Start-End':<11} | {'AudioNorm':<9} | {'TextNorm':<9} | {'Segment Text'}")
-    print("-" * 80)
-    for s in chunk_debug_stats[:5]:
-        time_str = f"{s['start']:.1f}-{s['end']:.1f}s"
-        print(f"{s['chunk_idx']:<3} | {time_str:<11} | {s['audio_norm']:<9.2f} | {s['text_norm']:<9.2f} | {s['text'][:45]}")
-    if len(chunk_debug_stats) > 5:
-        print(f"... ({len(chunk_debug_stats) - 5} more chunks processed)")
     print("=" * 80 + "\n")
 
 if __name__ == "__main__":

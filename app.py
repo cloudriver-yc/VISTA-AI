@@ -25,6 +25,8 @@ from sklearn.metrics import silhouette_score
 # Add src to path so we can import architecture
 sys.path.append(os.path.abspath("src"))
 from models.architecture import DualTransformerClassifier, EnhancedDualTransformerClassifier
+from models.explainer import MultimodalExplainer
+
 
 
 st.set_page_config(
@@ -305,36 +307,52 @@ if resolved:
         diarized_transcript = "\n\n".join(f"**Speaker {spk}:** {text}" for spk, text in diarized_lines)
 
         # -----------------
-        # 4. SIDE-BY-SIDE INFERENCE
+        # 4. SIDE-BY-SIDE INFERENCE (WITH XAI EXPLAINABILITY)
         # -----------------
-        with st.spinner("Executing Dual Model Inference (V1 Baseline & V2 Upgraded)..."):
+        with st.spinner("Executing Dual Model Inference with Explainable AI (XAI)..."):
             audio_tensor = torch.stack(audio_embeds).unsqueeze(0).to(device)       # (1, S, 768)
             chunked_text_tensor = torch.stack(chunked_text_embeds).unsqueeze(0).to(device) # (1, S, 768)
 
-            # V1 Inference
+            explainer = MultimodalExplainer()
+
+            # V1 Inference with XAI
             t0 = time.perf_counter()
             with torch.no_grad():
-                logits_v1, _, _ = model_v1(chunked_text_tensor, audio_tensor)
-                probs_v1 = torch.softmax(logits_v1, dim=1).squeeze(0)
+                xai_v1 = model_v1(chunked_text_tensor, audio_tensor, return_xai=True)
+                logits_v1 = xai_v1["logits"]
+                probs_v1 = xai_v1["probabilities"].squeeze(0)
             t_v1 = (time.perf_counter() - t0) * 1000
 
-            # V2 Inference
+            # V2 Inference with XAI
             t0 = time.perf_counter()
             with torch.no_grad():
-                logits_v2, _, _ = model_v2(chunked_text_tensor, audio_tensor)
-                probs_v2 = torch.softmax(logits_v2, dim=1).squeeze(0)
+                xai_v2 = model_v2(chunked_text_tensor, audio_tensor, return_xai=True)
+                logits_v2 = xai_v2["logits"]
+                probs_v2 = xai_v2["probabilities"].squeeze(0)
             t_v2 = (time.perf_counter() - t0) * 1000
 
             classes = ["Very Unsatisfied", "Unsatisfied", "Satisfied", "Very Satisfied"]
 
-            pred_v1_idx = torch.argmax(probs_v1).item()
-            pred_v2_idx = torch.argmax(probs_v2).item()
+            pred_v1_idx = xai_v1["predicted_class"]
+            pred_v2_idx = xai_v2["predicted_class"]
 
             pred_v1 = classes[pred_v1_idx]
             pred_v2 = classes[pred_v2_idx]
 
             conf_v1 = probs_v1[pred_v1_idx].item() * 100
             conf_v2 = probs_v2[pred_v2_idx].item() * 100
+
+            raw_turns_for_explainer = []
+            for s in segment_details:
+                raw_turns_for_explainer.append({
+                    "start": float(s["Start"].replace("s", "")),
+                    "end": float(s["End"].replace("s", "")),
+                    "text": s["Text"],
+                    "speaker": s.get("Speaker", f"Turn {s['#']}")
+                })
+
+            expl_v1 = explainer.explain(xai_v1, raw_turns_for_explainer, top_k=5)
+            expl_v2 = explainer.explain(xai_v2, raw_turns_for_explainer, top_k=5)
 
         st.session_state["processed_source_id"] = source_id
         st.session_state["results"] = {
@@ -355,6 +373,8 @@ if resolved:
             "conf_v2": conf_v2,
             "t_v1": t_v1,
             "t_v2": t_v2,
+            "expl_v1": expl_v1,
+            "expl_v2": expl_v2,
         }
 
     r = st.session_state["results"]
@@ -404,7 +424,47 @@ if resolved:
     st.bar_chart(df_compare)
 
     # -----------------
-    # 6. DEEP DEBUG DIAGNOSTICS & TELEMETRY
+    # 6. EXPLAINABLE AI (XAI) DECISION ATTRIBUTION
+    # -----------------
+    expl_v2 = r["expl_v2"]
+    st.markdown("### 🔍 Explainable AI (XAI): Why Did the Model Make This Decision?")
+    with st.container(border=True):
+        st.info(f"**📖 Executive Decision Audit:**\n\n{expl_v2['narrative_rationale']}")
+
+        # Modality Attribution Gauges
+        col_m1, col_m2 = st.columns(2)
+        with col_m1:
+            t_pct = expl_v2["modality_attribution"]["text_influence_pct"]
+            st.metric("Text Semantics Influence", f"{t_pct:.1f}%")
+            st.progress(t_pct / 100.0)
+        with col_m2:
+            a_pct = expl_v2["modality_attribution"]["audio_influence_pct"]
+            st.metric("Acoustic Prosody Influence", f"{a_pct:.1f}%")
+            st.progress(a_pct / 100.0)
+
+        st.markdown("#### 🎯 Pivotal Dialogue Turning Points (Highest Decision Influence)")
+        df_pivotal = pd.DataFrame([
+            {
+                "Turn": pt["turn_index"],
+                "Timestamp": pt["timestamp"],
+                "Speaker": pt["speaker"],
+                "Decision Saliency": f"{pt['saliency_pct']:.2f}%",
+                "Tone Diagnosis": pt["tone_diagnosis"],
+                "Dialogue Text": pt["text"]
+            }
+            for pt in expl_v2["top_pivotal_turns"]
+        ])
+        st.dataframe(df_pivotal, use_container_width=True)
+
+        st.markdown("#### 📈 Turn-by-Turn Attention Saliency Timeline")
+        timeline_saliency = [t["saliency_pct"] for t in expl_v2["all_turn_details"]]
+        df_timeline = pd.DataFrame({
+            "Attention Saliency (%)": timeline_saliency
+        }, index=[f"Turn {i+1}" for i in range(len(timeline_saliency))])
+        st.bar_chart(df_timeline)
+
+    # -----------------
+    # 7. DEEP DEBUG DIAGNOSTICS & TELEMETRY
     # -----------------
     with st.expander("🔬 Deep Multimodal Debug & Diagnostics", expanded=True):
         st.markdown("#### 1. Prediction Delta Table")
