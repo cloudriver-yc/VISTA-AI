@@ -98,16 +98,17 @@ Weights will be saved to `models/dual_transformer_v1_weights.pt` and `models/dua
   2. `Unsatisfied` (Flat emotion, problem not solved) — `_unsatisfied.wav`
   3. `Satisfied` (Flat emotion, problem solved) — `_satisfied.wav`
   4. `Very Satisfied` (Strong angry / shouting, problem not solved) — `_very_satisfied.wav`
-- **Dataset Size:** 326 multimodal dialogue samples (307 synthetic in `data/audio/out/` + 19 real-world YouTube dialogues in `data/audio/youtube/`).
+- **Dataset Size:** 327 multimodal dialogue samples (307 synthetic in `data/audio/out/` + 19 real-world YouTube dialogues in `data/audio/youtube/` + 1 uploaded real-world call in `data/features/upload_1755884171_51632.pt`).
 - **Train/Test Isolation (`data/train_test_split.json`):**
-  - **Train Set:** 278 dialogues (264 synthetic + 14 YouTube).
+  - **Train Set:** 279 dialogues (264 synthetic + 14 YouTube + 1 uploaded real call).
   - **Test Set:** 48 dialogues (43 synthetic + 5 held-out YouTube).
   - **YouTube Preservation:** Every category has at least 1 full video held out exclusively for test.
   - **Zero Leakage:** 0 files shared between train and test.
 - **Benchmark Accuracies (MPS GPU):**
-  - V1 Baseline (Mean Pooling): **100.0% Train Acc**, **93.8% Test Acc**, **40.0% Held-out YouTube Acc** (`models/dual_transformer_v1_weights.pt`).
-  - V2 Upgraded (`MLPResBlock` + `[CLS]`): **100.0% Train Acc**, **91.7% Test Acc**, **40.0% Held-out YouTube Acc** (`models/dual_transformer_v2_weights.pt`).
-- **Real-World Dispute Test:** Both V1 (99.47%) and V2 (99.57%) correctly predict `Very Unsatisfied`.
+  - V1 Baseline (Mean Pooling): **100.0% Train Acc**, **91.7% Test Acc** (`models/dual_transformer_v1_weights.pt`).
+  - V2 Upgraded (`MLPResBlock` + `[CLS]`): **100.0% Train Acc**, **91.7% Test Acc** (`models/dual_transformer_v2_weights.pt`).
+- **Real-World Dispute Test:** Both V1 (99.65%) and V2 (99.31%) correctly predict `Very Unsatisfied`.
+
 
 
 

@@ -66,10 +66,11 @@ Train both the **V1 Baseline** (Linear + Mean Pooling) and **V2 Upgraded** (`MLP
 ```bash
 python src/train.py --model_version both --epochs 25 --batch_size 16 --lr 2e-4
 ```
-- **Strict Isolation:** Zero-leakage conversation splits (278 Train / 48 Test samples, 5 held-out real-world YouTube videos).
+- **Strict Isolation:** Zero-leakage conversation splits (279 Train / 48 Test samples, 5 held-out real-world YouTube videos).
 - **Benchmark Results:**
-  - V1 Baseline: **100.0% Train Acc**, **93.8% Test Acc**, **40.0% Held-out YouTube Acc** (`models/dual_transformer_v1_weights.pt`).
-  - V2 Upgraded: **100.0% Train Acc**, **91.7% Test Acc**, **40.0% Held-out YouTube Acc** (`models/dual_transformer_v2_weights.pt`).
+  - V1 Baseline: **100.0% Train Acc**, **91.7% Test Acc** (`models/dual_transformer_v1_weights.pt`).
+  - V2 Upgraded: **100.0% Train Acc**, **91.7% Test Acc** (`models/dual_transformer_v2_weights.pt`).
+
 
 
 ---
