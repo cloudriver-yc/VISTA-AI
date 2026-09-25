@@ -30,11 +30,12 @@ The repository has been structured according to strict software engineering stan
 VISTA-AI/
 ├── .agents/                    # Workspace rules and handoff context
 ├── .env                        # Environment variables (e.g., ELEVENLABS_API_KEY, HF_TOKEN)
+├── CLAUDE.md                   # Guidance for Claude Code: commands, architecture, pitfalls (label mapping, split manifest)
 ├── app.py                      # Interactive Streamlit Web UI (Side-by-side V1 vs V2)
 ├── data/                       # Datasets & Metadata
 │   ├── audio/out/              # Synthesized WAV files (stereo)
 │   ├── audio/youtube/          # Downloaded YouTube 16kHz audio & captions/
-│   ├── features/               # 326 extracted PyTorch tensors (audio_embeds, text_embeds, label)
+│   ├── features/               # 328 extracted PyTorch tensors (audio_embeds, text_embeds, label)
 │   ├── raw/                    # Raw JSONL transcripts and metadata
 │   ├── train_test_split.json   # Zero-leakage conversation-level train/test split manifest
 │   └── youtube_metadata.jsonl  # YouTube titles, captions, and Whisper transcripts
@@ -52,7 +53,8 @@ VISTA-AI/
     ├── data/
     │   └── dataset.py          # Custom PyTorch Dataset (RealCSATDataset) with conversation isolation
     ├── models/
-    │   └── architecture.py     # DualTransformerClassifier (V1), EnhancedDualTransformerClassifier (V2), MLPResBlock
+    │   ├── architecture.py     # DualTransformerClassifier (V1), EnhancedDualTransformerClassifier (V2), MLPResBlock
+    │   └── explainer.py        # MultimodalExplainer (XAI: turn saliency, modality ratio, tone diagnosis, narrative)
     └── train.py                # Comparative training loop (Run via `python src/train.py --model_version both`)
 ```
 
