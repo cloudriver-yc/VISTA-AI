@@ -17,16 +17,18 @@ from sentence_transformers import SentenceTransformer
 
 # Add src to path so we can import architecture
 sys.path.append(os.path.abspath("src"))
-from models.architecture import DualTransformerClassifier, EnhancedDualTransformerClassifier
+import paths
+from audio_utils import segment_audio
+from models.architecture import DualTransformerClassifier, EnhancedDualTransformerClassifier, AdaptedCSATModel, with_adapter_if_available
 from models.explainer import MultimodalExplainer
 
 
 
 def main():
     youtube_url = "https://youtu.be/gD7xQGXpSBg?si=Ok1BDZTkzom_K__6"
-    tmp_audio = "data/audio/tmp/youtube.wav"
+    tmp_audio = os.path.join(paths.TMP_DIR, "youtube.wav")
     
-    os.makedirs("data/audio/tmp", exist_ok=True)
+    os.makedirs(paths.TMP_DIR, exist_ok=True)
     
     if os.path.exists(tmp_audio):
         print(f"1. Audio already exists at {tmp_audio}, skipping download.")
@@ -44,7 +46,7 @@ def main():
         except subprocess.CalledProcessError:
             print("\n[ERROR] YouTube blocked the download (HTTP 429 / Bot Protection).")
             print("Try running this manual command in your terminal first:")
-            print(f"yt-dlp --cookies-from-browser chrome -x --audio-format wav -o data/audio/tmp/youtube {youtube_url}\n")
+            print(f"yt-dlp --cookies-from-browser chrome -x --audio-format wav -o {paths.TMP_DIR}/youtube {youtube_url}\n")
             sys.exit(1)
     
     # Device Selection (Apple Silicon GPU MPS)
@@ -71,12 +73,18 @@ def main():
     v1_path = "models/dual_transformer_v1_weights.pt" if os.path.exists("models/dual_transformer_v1_weights.pt") else "models/dual_transformer_weights.pt"
     model_v1.load_state_dict(torch.load(v1_path, map_location=device))
     model_v1.eval()
+    model_v1 = with_adapter_if_available(model_v1, "models/csat_adapter_v1.pt", device)
+    if isinstance(model_v1, AdaptedCSATModel):
+        print("     + stage-2 adapter (trained on uploaded real calls)")
     
     print("   • Loading V2 Upgraded (MLP ResBlock + [CLS] Token)...")
     model_v2 = EnhancedDualTransformerClassifier(num_classes=4, audio_dim=768, text_dim=768).to(device)
     v2_path = "models/dual_transformer_v2_weights.pt" if os.path.exists("models/dual_transformer_v2_weights.pt") else "models/dual_transformer_weights.pt"
     model_v2.load_state_dict(torch.load(v2_path, map_location=device))
     model_v2.eval()
+    model_v2 = with_adapter_if_available(model_v2, "models/csat_adapter_v2.pt", device)
+    if isinstance(model_v2, AdaptedCSATModel):
+        print("     + stage-2 adapter (trained on uploaded real calls)")
     
     print("3. Transcribing with Whisper & Extracting Dynamic Chunks...")
     audio_data, sr = librosa.load(tmp_audio, sr=16000)
@@ -98,11 +106,8 @@ def main():
         seg_text = segment["text"].strip()
         if not seg_text: continue
             
-        start_sample = int(segment["start"] * sr)
-        end_sample = int(segment["end"] * sr)
-        seg_audio = audio_fp32[start_sample:end_sample]
-        
-        if len(seg_audio) < 160: continue
+        seg_audio = segment_audio(audio_fp32, segment["start"], segment["end"], sr)
+        if seg_audio is None: continue
             
         # WavLM Acoustic Prosody
         inputs = wavlm_processor(seg_audio, sampling_rate=sr, return_tensors="pt")

@@ -11,17 +11,24 @@ import subprocess
 from tqdm import tqdm
 from transformers import AutoFeatureExtractor, WavLMModel
 from sentence_transformers import SentenceTransformer
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
+import paths
+from audio_utils import segment_audio
 
 YTDLP_BIN = os.path.abspath(".venv/bin/yt-dlp")
-AUDIO_OUT_DIR = "data/audio/youtube"
-CAPTIONS_DIR = "data/audio/youtube/captions"
-FEATURES_DIR = "data/features"
-METADATA_FILE = "data/youtube_metadata.jsonl"
+AUDIO_OUT_DIR = paths.YOUTUBE_AUDIO_DIR
+CAPTIONS_DIR = paths.YOUTUBE_CAPTIONS_DIR
+FEATURES_DIR = paths.FEATURES_DIR
+METADATA_FILE = paths.YOUTUBE_METADATA_PATH
 
+# The playlists were curated with the everyday meaning of their names ("very_unsatisfied" = angry
+# customers), but the project's canonical mapping is reversed for the two extreme classes
+# (0 = delighted & resolved, 3 = angry & unresolved; see CLAUDE.md). The labels below are therefore
+# swapped for those two playlists, so their calls get the project's labels.
 PLAYLISTS = {
     "very_unsatisfied": {
         "url": "https://www.youtube.com/playlist?list=PLUo8PXyzoa18",
-        "label": 0
+        "label": 3
     },
     "unsatisfied": {
         "url": "https://www.youtube.com/playlist?list=PLVeJX74nMy1w",
@@ -33,7 +40,7 @@ PLAYLISTS = {
     },
     "very_satisfied": {
         "url": "https://www.youtube.com/playlist?list=PLCMpWCMAmSPc",
-        "label": 3
+        "label": 0
     }
 }
 
@@ -185,12 +192,8 @@ def main():
                     if is_broll_or_intro_outro(seg_text, is_first_segment=is_first, is_last_segment=is_last):
                         continue
                         
-                    start_sample = int(segment["start"] * sr)
-                    end_sample = int(segment["end"] * sr)
-                    seg_audio = audio_fp32[start_sample:end_sample]
-                    
-                    if len(seg_audio) < 160:
-                        continue
+                    seg_audio = segment_audio(audio_fp32, segment["start"], segment["end"], sr)
+                    if seg_audio is None: continue
                         
                     inputs = wavlm_processor(seg_audio, sampling_rate=sr, return_tensors="pt")
                     input_values = inputs.input_values.to(device)
@@ -208,10 +211,8 @@ def main():
                     for segment in segments:
                         seg_text = segment["text"].strip()
                         if not seg_text: continue
-                        start_sample = int(segment["start"] * sr)
-                        end_sample = int(segment["end"] * sr)
-                        seg_audio = audio_fp32[start_sample:end_sample]
-                        if len(seg_audio) < 160: continue
+                        seg_audio = segment_audio(audio_fp32, segment["start"], segment["end"], sr)
+                        if seg_audio is None: continue
                         inputs = wavlm_processor(seg_audio, sampling_rate=sr, return_tensors="pt")
                         with torch.no_grad():
                             a_emb = wavlm_model(inputs.input_values.to(device)).last_hidden_state.mean(dim=1).squeeze(0).cpu()
@@ -228,7 +229,8 @@ def main():
                 torch.save({
                     "audio_embeds": audio_tensor,
                     "text_embeds": chunked_text_tensor,
-                    "label": label_tensor
+                    "label": label_tensor,
+                    "label_convention": "project"
                 }, output_tensor_path)
                 
                 metadata_record = {

@@ -10,10 +10,22 @@
 
 ```mermaid
 graph TD
-    subgraph S1["1. Raw Input Modalities"]
-        A1["Raw Stereo Audio (16kHz WAV)"]
-        T1["Whisper ASR Transcript"]
+    subgraph S0["0. Data Generation & Acoustic Augmentation (training data only)"]
+        GEM["Script Generator via Antigravity CLI (Gemini 3.8 Flash first; Gemini 3.1 Pro / Claude Sonnet 4.6 fallback)"]
+        TTS["ElevenLabs TTS: Stereo WAV (customer ch0, engineer ch1)"]
+        MIX["Mono Mixdown (per-speaker gain +/-6 dB)"]
+        AUG["Augmentation Chain: speed/pitch, room reverb, background noise (ESC-50 / colored / hum / babble, 5-30 dB SNR), telephone 8 kHz + mu-law, gain"]
+        GEM --> TTS
+        TTS --> MIX
+        MIX --> AUG
     end
+
+    subgraph S1["1. Raw Input Modalities"]
+        A1["16kHz Mono Audio (augmented TTS for training; real calls for test / inference)"]
+        T1["Whisper ASR Transcript"]
+        A1 --> T1
+    end
+    AUG --> A1
 
     subgraph S2["2. Dynamic Dialogue Turn Segmentation"]
         VAD["Voice Activity Detection (VAD) & Turn Slicing"]
@@ -80,6 +92,48 @@ graph TD
     end
 ```
 
+### Data Split & Two-Stage Training Diagram
+
+```mermaid
+graph LR
+    subgraph SYN["Synthetic TTS pool"]
+        SCR["Unique scripts (grouped by text hash)"]
+        CLEAN["Clean TTS clips (mono mixdown)"]
+        AUGC["Augmented clips (__augNN)"]
+        SCR --> CLEAN
+        CLEAN --> AUGC
+    end
+    subgraph REAL["Real-world pool"]
+        YT["YouTube calls (yt_*)"]
+        UP["Uploaded calls (upload_*)"]
+    end
+    SCR -->|"~85% of scripts per class"| TRAIN["TRAIN: clean + augmented"]
+    SCR -->|"~15% of scripts per class"| VAL["VAL: held-out scripts, model selection"]
+    UP --> FT["FINETUNE: uploaded real calls"]
+    YT --> TEST["TEST: YouTube calls, never trained on"]
+
+    TRAIN --> S1["Stage 1: pretrain V1 / V2 (all weights trainable)"]
+    VAL --> S1
+    S1 --> FROZEN["Frozen stage-1 model: encode() gives a 512-d call summary"]
+    FROZEN --> ADAPT["Stage 2: ResidualAdapterHead (LayerNorm, 512 to 64, GELU, 64 to 4, zero-init)"]
+    FT --> ADAPT
+    FROZEN --> SUM["Adapted logits = frozen logits + adapter output"]
+    ADAPT --> SUM
+    SUM --> S3["Stage 3: evaluate stage 1 vs stage 2"]
+    TEST --> S3
+```
+
+**Why freeze the model and add a zero-initialised residual adapter?** There are only a handful of real uploaded calls. Fine-tuning all 7.7M (V1) or 9.8M (V2) parameters on them would overwrite what the model learned from thousands of synthetic dialogues, so the pretrained model is frozen and only a small head (34k parameters) learns a correction from real audio. The head's output is added to the frozen logits, and its last layer starts at zero, so the adapted model begins exactly at the stage-1 model and can only move where the real calls push it. Scoring both stages on the same YouTube calls shows directly whether the real-data adaptation helped. With only two uploads, the head can separate them along almost any direction and then shift every other call the same way (unconstrained, it pushed V2 to predict "Unsatisfied" for 10 of 19 YouTube calls and cut its synthetic-validation accuracy from 99.4% to 73.1%). So stage 2 adds a KL "anchor" that keeps predictions on synthetic calls close to the frozen model's, and a guard that rejects the head if it lowers synthetic validation accuracy. Both use only synthetic data, never the YouTube test set.
+
+---
+
+### Why Acoustic Augmentation?
+* **Domain gap:** training audio was clean studio TTS on the customer channel only, while YouTube calls, uploads and the app are noisy mono recordings of both speakers. Mono mixdown plus noise, reverb and telephone-band simulation moves the training distribution toward real calls.
+* **WavLM robustness:** the acoustic branch learns prosody cues (tension, energy, pitch contour) that survive noise and codec artefacts instead of TTS-specific studio characteristics.
+* **Whisper realism:** every augmented clip is transcribed by Whisper, so the text branch also sees realistic ASR errors under noise.
+* **Text diversity:** augmentation cannot add new wording. The original 307 TTS clips came from only 16 unique scripts, so new unique scripts are generated first, with Gemini and Claude models available through the Antigravity CLI.
+* **Leakage-safe grouping:** all re-voicings and augmented variants of a script stay on the same side of the train/val split, and every real-world call stays in test.
+
 ---
 
 ### Detailed Architectural Breakdown: What, How, Why
@@ -118,6 +172,8 @@ An end-to-end **Hierarchical Multimodal Cross-Attention Transformer** that predi
 | **Isolated Test Accuracy** | 71.2% | **93.8%** | **91.7%** |
 | **Held-Out YouTube Generalization**| 0.0% (Failed on real audio) | **40.0%** | **40.0%** |
 | **Inference Latency on MPS** | $\approx 850\text{ms}$ | $625\text{ms}$ | **$176\text{ms}$ (3.5x Faster)** |
+
+> Accuracy rows above were measured on the legacy split (real calls partly in train, synthetic test sharing script text with train). Re-benchmark after retraining on the augmented train / real-world test split.
 
 ---
 
@@ -195,5 +251,5 @@ An end-to-end **Hierarchical Multimodal Cross-Attention Transformer** that predi
 ## 4. Key Takeaways for Professor Defense
 
 1. **Multimodality is Essential:** Prosody (`WavLM`) detects emotional intensity/stress; Text (`MPNet`) provides contextual semantics. Bidirectional Cross-Attention resolves ambiguity between sarcasm, polite anger, and genuine satisfaction.
-2. **Zero-Leakage Generalization:** Verified on a strict conversation-level isolated split (278 Train / 48 Test) with 5 held-out real-world YouTube calls, proving resilience against real-world customer service disputes.
+2. **Zero-Leakage Generalization with Transfer Learning:** Pretrained only on synthetic TTS dialogues (clean + acoustically augmented) and validated on held-out *scripts*. Then adapted to real audio by training a small head on the frozen model with uploaded calls, and tested on 19 YouTube calls that are never used in either stage.
 3. **Dual Model Comparison Framework:** Both V1 (Mean Pooling regularizer) and V2 (MLP ResBlock + `[CLS]` Token) run side-by-side with full diagnostic telemetry on every single inference request.

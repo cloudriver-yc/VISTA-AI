@@ -1,6 +1,11 @@
+import os
+import sys
 import json
 import re
 import difflib
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
+import paths
 
 def normalize_text(text):
     text = text.lower()
@@ -27,7 +32,7 @@ def calculate_wer(reference, hypothesis):
     return min(1.0, errors / len(ref_words))
 
 def main():
-    metadata_file = "data/youtube_metadata.jsonl"
+    metadata_file = paths.YOUTUBE_METADATA_PATH
     results = []
     
     with open(metadata_file, "r", encoding="utf-8") as f:

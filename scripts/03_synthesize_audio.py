@@ -1,11 +1,17 @@
 import os
+import re
+import sys
 import json
+import hashlib
+import argparse
 import numpy as np
 import soundfile as sf
 import asyncio
 import httpx
 from tqdm.asyncio import tqdm
 from dotenv import load_dotenv
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
+import paths
 
 load_dotenv()
 
@@ -68,6 +74,19 @@ class AudioAssembler:
         return self.end_sample / self.sr # Return duration in seconds
 
 
+# Turns that are only stage directions (e.g. "[hold music — 90 second pause]") have no speakable text;
+# ElevenLabs rejects them, so they become a short local silence instead of an API call.
+STAGE_DIRECTION_PAUSE_SEC = 2.0
+
+
+class TTSRequestRejected(Exception):
+    """ElevenLabs rejected this input (400/422); skip the dialogue instead of aborting the whole run."""
+
+
+def has_speakable_text(text):
+    return re.search(r"\w", re.sub(r"\[[^\]]*\]", "", text)) is not None
+
+
 async def synthesize_turn(text, voice_id, stability, style):
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}?output_format=pcm_16000"
     headers = {
@@ -93,10 +112,10 @@ async def synthesize_turn(text, voice_id, stability, style):
                 return np.frombuffer(response.content, dtype=np.int16)
             elif response.status_code == 429:
                 await asyncio.sleep(2 ** attempt)
+            elif response.status_code in (400, 422):
+                raise TTSRequestRejected(f"{response.status_code}: {response.text[:300]}")
             else:
-                if response.status_code == 400:
-                    print("400 Bad Request Payload:", response.text)
-                response.raise_for_status()
+                response.raise_for_status()  # 401 / quota / 5xx: stop the run
         raise Exception("Failed to synthesize after 3 attempts due to rate limits.")
 
 
@@ -124,7 +143,9 @@ async def process_dialogue(dialogue, out_dir, tmp_dir):
         
         # Synthesize (or load from cache)
         cache_path = os.path.join(tmp_dir, f"{dialogue_id}_turn_{idx}.npy")
-        if os.path.exists(cache_path):
+        if not has_speakable_text(turn["text"]):
+            audio_array = np.zeros(int(STAGE_DIRECTION_PAUSE_SEC * SAMPLE_RATE), dtype=np.int16)
+        elif os.path.exists(cache_path):
             audio_array = np.load(cache_path)
         else:
             audio_array = await synthesize_turn(turn["text"], voice_id, stability, style)
@@ -137,11 +158,37 @@ async def process_dialogue(dialogue, out_dir, tmp_dir):
     return duration
 
 
+def text_key(dialogue):
+    """Hash of the turn texts; two rows with the same key are the same script."""
+    joined = "||".join(t["text"].strip().lower() for t in dialogue["turns"])
+    return hashlib.sha1(joined.encode("utf-8")).hexdigest()
+
+
+def select_missing(dialogues, out_dir):
+    """Keep only rows with no WAV yet whose script text has not already been voiced."""
+    voiced_keys = {text_key(d) for d in dialogues if os.path.exists(os.path.join(out_dir, f"{d['dialogue_id']}.wav"))}
+    selected = []
+    for d in dialogues:
+        if os.path.exists(os.path.join(out_dir, f"{d['dialogue_id']}.wav")):
+            continue
+        key = text_key(d)
+        if key in voiced_keys:
+            continue
+        voiced_keys.add(key)
+        selected.append(d)
+    return selected
+
+
 async def main():
-    os.makedirs("data/audio/out", exist_ok=True)
-    os.makedirs("data/audio/tmp", exist_ok=True)
+    parser = argparse.ArgumentParser(description="Synthesize dialogue scripts to stereo TTS audio via ElevenLabs")
+    parser.add_argument("--only-missing", action="store_true",
+                        help="Only voice scripts without a WAV whose text is not already voiced by another row")
+    args = parser.parse_args()
+
+    os.makedirs(paths.TTS_DIR, exist_ok=True)
+    os.makedirs(paths.TTS_TURN_CACHE_DIR, exist_ok=True)
     
-    input_file = "data/raw/dialogues.jsonl"
+    input_file = paths.DIALOGUES_PATH
     if not os.path.exists(input_file):
         print(f"Error: {input_file} not found.")
         return
@@ -151,12 +198,30 @@ async def main():
         for line in f:
             if line.strip():
                 dialogues.append(json.loads(line))
+
+    if args.only_missing:
+        total = len(dialogues)
+        dialogues = select_missing(dialogues, paths.TTS_DIR)
+        print(f"--only-missing: {len(dialogues)} of {total} scripts need voicing.")
                 
     print(f"Processing {len(dialogues)} dialogues...")
     
+    # Already-voiced turns are loaded from the per-turn cache, so a re-run only pays for missing turns
+    skipped = []
     for dialogue in tqdm(dialogues):
-        dur = await process_dialogue(dialogue, "data/audio/out", "data/audio/tmp")
-        print(f"Generated {dialogue['dialogue_id']}.wav - {dur:.1f} seconds")
+        try:
+            dur = await process_dialogue(dialogue, paths.TTS_DIR, paths.TTS_TURN_CACHE_DIR)
+        except TTSRequestRejected as e:
+            skipped.append(dialogue["dialogue_id"])
+            tqdm.write(f"⚠️ Skipped {dialogue['dialogue_id']}: ElevenLabs rejected a turn ({e})")
+            continue
+        tqdm.write(f"Generated {dialogue['dialogue_id']}.wav - {dur:.1f} seconds")
+
+    print(f"\nDone: {len(dialogues) - len(skipped)} voiced, {len(skipped)} skipped.")
+    if skipped:
+        print("Skipped dialogues (fix their text in dialogues.jsonl, then re-run with --only-missing):")
+        for dialogue_id in skipped:
+            print(f"  {dialogue_id}")
 
 if __name__ == "__main__":
     asyncio.run(main())

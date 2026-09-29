@@ -139,6 +139,26 @@ class DualTransformerClassifier(nn.Module):
             nn.Linear(128, num_classes)
         )
 
+    @staticmethod
+    def _pool(seq_out, padding_mask):
+        if padding_mask is not None:
+            mask_expanded = (~padding_mask).unsqueeze(-1).float() # (B, S, 1)
+            sum_embeddings = torch.sum(seq_out * mask_expanded, dim=1)
+            sum_mask = torch.clamp(mask_expanded.sum(dim=1), min=1e-9)
+            return sum_embeddings / sum_mask # (B, d_model)
+        return seq_out.mean(dim=1) # (B, d_model)
+
+    def encode(self, text_embeds, audio_embeds, padding_mask=None):
+        """Returns the (B, d_model) dialogue summary that feeds the classifier (used by adapter heads)."""
+        t_proj = self.text_proj(text_embeds)
+        a_proj = self.audio_proj(audio_embeds)
+        h = self.pos_encoder(self.cross_modal_fusion(t_proj, a_proj))
+        if padding_mask is not None:
+            seq_out = self.sequence_transformer(h, src_key_padding_mask=padding_mask)
+        else:
+            seq_out = self.sequence_transformer(h)
+        return self._pool(seq_out, padding_mask)
+
     def forward(self, text_embeds, audio_embeds, padding_mask=None, return_xai=False):
         """
         Inputs:
@@ -147,54 +167,42 @@ class DualTransformerClassifier(nn.Module):
         - padding_mask: (Batch, Segments) - True for padded positions
         - return_xai: (bool) - if True, returns dictionary with attention saliency and modality attribution
         """
+        if not return_xai:
+            return self.classifier(self.encode(text_embeds, audio_embeds, padding_mask)), None, None
+
         B, S, _ = text_embeds.size()
-        
+
         # 1. Project both modalities to unified d_model
         t_proj = self.text_proj(text_embeds)   # (B, S, d_model)
         a_proj = self.audio_proj(audio_embeds) # (B, S, d_model)
-        
+
         # 2. Cross-Modal Fusion
-        if return_xai:
-            fused, fusion_info = self.cross_modal_fusion(t_proj, a_proj, return_details=True)
-        else:
-            fused = self.cross_modal_fusion(t_proj, a_proj)
-        
+        fused, fusion_info = self.cross_modal_fusion(t_proj, a_proj, return_details=True)
+
         # 3. Add positional embeddings (turn progression)
         h = self.pos_encoder(fused)
-        
-        # 4. Process conversational dynamics across turns
-        last_attn = None
-        if return_xai:
-            curr_h = h
-            for layer in self.sequence_transformer.layers:
-                attn_out, attn_weights = layer.self_attn(
-                    curr_h, curr_h, curr_h,
-                    key_padding_mask=padding_mask,
-                    need_weights=True,
-                    average_attn_weights=True
-                )
-                curr_h = layer.norm1(curr_h + layer.dropout1(attn_out))
-                ff_out = layer.linear2(layer.dropout(layer.activation(layer.linear1(curr_h))))
-                curr_h = layer.norm2(curr_h + layer.dropout2(ff_out))
-                last_attn = attn_weights
-            seq_out = curr_h
-        else:
-            if padding_mask is not None:
-                seq_out = self.sequence_transformer(h, src_key_padding_mask=padding_mask)
-            else:
-                seq_out = self.sequence_transformer(h)
 
-        if padding_mask is not None:
-            mask_expanded = (~padding_mask).unsqueeze(-1).float() # (B, S, 1)
-            sum_embeddings = torch.sum(seq_out * mask_expanded, dim=1)
-            sum_mask = torch.clamp(mask_expanded.sum(dim=1), min=1e-9)
-            pooled = sum_embeddings / sum_mask # (B, d_model)
-        else:
-            pooled = seq_out.mean(dim=1) # (B, d_model)
-            
+        # 4. Process conversational dynamics across turns (manual loop to capture attention weights)
+        last_attn = None
+        curr_h = h
+        for layer in self.sequence_transformer.layers:
+            attn_out, attn_weights = layer.self_attn(
+                curr_h, curr_h, curr_h,
+                key_padding_mask=padding_mask,
+                need_weights=True,
+                average_attn_weights=True
+            )
+            curr_h = layer.norm1(curr_h + layer.dropout1(attn_out))
+            ff_out = layer.linear2(layer.dropout(layer.activation(layer.linear1(curr_h))))
+            curr_h = layer.norm2(curr_h + layer.dropout2(ff_out))
+            last_attn = attn_weights
+        seq_out = curr_h
+
+        pooled = self._pool(seq_out, padding_mask)
+
         # 5. CSAT Logits
         logits = self.classifier(pooled) # (B, num_classes)
-        
+
         if return_xai:
             probs = F.softmax(logits, dim=-1)
             if last_attn is not None:
@@ -301,6 +309,27 @@ class EnhancedDualTransformerClassifier(nn.Module):
             nn.Linear(128, num_classes)
         )
 
+    def _prepend_cls(self, fused, padding_mask):
+        """Prepends the [CLS] token (never padded), adds positional encoding, and extends the mask."""
+        B = fused.size(0)
+        seq_with_cls = torch.cat([self.cls_token.expand(B, -1, -1), fused], dim=1) # (B, 1 + S, d_model)
+        h = self.pos_encoder(seq_with_cls)
+        if padding_mask is None:
+            return h, None
+        cls_mask = torch.zeros((B, 1), dtype=torch.bool, device=padding_mask.device)
+        return h, torch.cat([cls_mask, padding_mask], dim=1)
+
+    def encode(self, text_embeds, audio_embeds, padding_mask=None):
+        """Returns the (B, d_model) [CLS] representation that feeds the classifier (used by adapter heads)."""
+        t_proj = self.text_proj(text_embeds)
+        a_proj = self.audio_proj(audio_embeds)
+        h, mask_with_cls = self._prepend_cls(self.cross_modal_fusion(t_proj, a_proj), padding_mask)
+        if mask_with_cls is not None:
+            seq_out = self.sequence_transformer(h, src_key_padding_mask=mask_with_cls)
+        else:
+            seq_out = self.sequence_transformer(h)
+        return seq_out[:, 0, :]
+
     def forward(self, text_embeds, audio_embeds, padding_mask=None, return_xai=False):
         """
         Inputs:
@@ -309,53 +338,37 @@ class EnhancedDualTransformerClassifier(nn.Module):
         - padding_mask: (Batch, Segments) - True for padded positions
         - return_xai: (bool) - if True, returns dictionary with attention saliency and modality attribution
         """
+        if not return_xai:
+            return self.classifier(self.encode(text_embeds, audio_embeds, padding_mask)), None, None
+
         B, S, _ = text_embeds.size()
-        
+
         # 1. Project both modalities through MLP ResBlocks
         t_proj = self.text_proj(text_embeds)   # (B, S, d_model)
         a_proj = self.audio_proj(audio_embeds) # (B, S, d_model)
-        
-        # 2. Cross-Modal Fusion
-        if return_xai:
-            fused, fusion_info = self.cross_modal_fusion(t_proj, a_proj, return_details=True)
-        else:
-            fused = self.cross_modal_fusion(t_proj, a_proj)
-        
-        # 3. Prepend [CLS] token: (B, 1 + S, d_model)
-        cls_tokens = self.cls_token.expand(B, -1, -1)
-        seq_with_cls = torch.cat([cls_tokens, fused], dim=1)
-        
-        # 4. Add positional encoding
-        h = self.pos_encoder(seq_with_cls)
-        
-        # 5. Adjust padding mask for [CLS] token (CLS is never padded -> False)
-        if padding_mask is not None:
-            cls_mask = torch.zeros((B, 1), dtype=torch.bool, device=padding_mask.device)
-            mask_with_cls = torch.cat([cls_mask, padding_mask], dim=1)
-        else:
-            mask_with_cls = None
 
+        # 2. Cross-Modal Fusion
+        fused, fusion_info = self.cross_modal_fusion(t_proj, a_proj, return_details=True)
+
+        # 3-5. Prepend [CLS], add positional encoding, extend padding mask (CLS is never padded)
+        h, mask_with_cls = self._prepend_cls(fused, padding_mask)
+
+        # Manual encoder loop to capture attention weights
         last_attn = None
-        if return_xai:
-            curr_h = h
-            for layer in self.sequence_transformer.layers:
-                attn_out, attn_weights = layer.self_attn(
-                    curr_h, curr_h, curr_h,
-                    key_padding_mask=mask_with_cls,
-                    need_weights=True,
-                    average_attn_weights=True
-                )
-                curr_h = layer.norm1(curr_h + layer.dropout1(attn_out))
-                ff_out = layer.linear2(layer.dropout(layer.activation(layer.linear1(curr_h))))
-                curr_h = layer.norm2(curr_h + layer.dropout2(ff_out))
-                last_attn = attn_weights
-            seq_out = curr_h
-        else:
-            if mask_with_cls is not None:
-                seq_out = self.sequence_transformer(h, src_key_padding_mask=mask_with_cls)
-            else:
-                seq_out = self.sequence_transformer(h)
-            
+        curr_h = h
+        for layer in self.sequence_transformer.layers:
+            attn_out, attn_weights = layer.self_attn(
+                curr_h, curr_h, curr_h,
+                key_padding_mask=mask_with_cls,
+                need_weights=True,
+                average_attn_weights=True
+            )
+            curr_h = layer.norm1(curr_h + layer.dropout1(attn_out))
+            ff_out = layer.linear2(layer.dropout(layer.activation(layer.linear1(curr_h))))
+            curr_h = layer.norm2(curr_h + layer.dropout2(ff_out))
+            last_attn = attn_weights
+        seq_out = curr_h
+
         # 6. Extract [CLS] token representation (index 0)
         cls_rep = seq_out[:, 0, :] # (B, d_model)
         
@@ -408,6 +421,73 @@ class EnhancedDualTransformerClassifier(nn.Module):
             }
 
         return logits, None, None
+
+
+class ResidualAdapterHead(nn.Module):
+    """
+    Small head trained on real calls on top of a frozen, synthetically pretrained model.
+    Its output is added to the frozen model's logits. The last layer is zero-initialised,
+    so before any training the adapted model predicts exactly what the base model predicts.
+    """
+    def __init__(self, d_model=512, hidden_dim=64, num_classes=4, dropout=0.3):
+        super().__init__()
+        self.hidden = nn.Sequential(
+            nn.LayerNorm(d_model),
+            nn.Linear(d_model, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(p=dropout),
+        )
+        self.out = nn.Linear(hidden_dim, num_classes)
+        nn.init.zeros_(self.out.weight)
+        nn.init.zeros_(self.out.bias)
+
+    def forward(self, summary):
+        return self.out(self.hidden(summary))
+
+
+class AdaptedCSATModel(nn.Module):
+    """
+    Stage-2 model: a frozen V1/V2 base plus a trainable ResidualAdapterHead.
+    Same call signature and return values as the base models, so training, the CLI and the app
+    can use it in place of a base model. XAI fields (saliency, modality ratio, ...) come from the
+    frozen base; only the logits/probabilities/prediction are replaced by the adapted ones.
+    """
+    def __init__(self, base, adapter):
+        super().__init__()
+        self.base = base
+        self.adapter = adapter
+        for p in self.base.parameters():
+            p.requires_grad = False
+        self.base.eval()
+
+    def train(self, mode=True):
+        super().train(mode)
+        self.base.eval()  # the frozen base never runs dropout
+        return self
+
+    def adapted_logits(self, text_embeds, audio_embeds, padding_mask=None):
+        summary = self.base.encode(text_embeds, audio_embeds, padding_mask)
+        return self.base.classifier(summary) + self.adapter(summary)
+
+    def forward(self, text_embeds, audio_embeds, padding_mask=None, return_xai=False):
+        logits = self.adapted_logits(text_embeds, audio_embeds, padding_mask)
+        if not return_xai:
+            return logits, None, None
+        xai = self.base(text_embeds, audio_embeds, padding_mask=padding_mask, return_xai=True)
+        xai["logits"] = logits
+        xai["probabilities"] = F.softmax(logits, dim=-1)
+        xai["predicted_class"] = logits.argmax(dim=-1).item()
+        return xai
+
+
+def with_adapter_if_available(base, adapter_path, device):
+    """Wraps a loaded stage-1 model with its stage-2 adapter when the adapter file exists; otherwise returns it unchanged."""
+    import os
+    if not os.path.exists(adapter_path):
+        return base
+    adapter = ResidualAdapterHead()
+    adapter.load_state_dict(torch.load(adapter_path, map_location="cpu"))
+    return AdaptedCSATModel(base, adapter).to(device).eval()
 
 
 class YShapedHybridCNN(nn.Module):

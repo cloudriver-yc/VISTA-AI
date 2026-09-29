@@ -24,7 +24,9 @@ from sklearn.metrics import silhouette_score
 
 # Add src to path so we can import architecture
 sys.path.append(os.path.abspath("src"))
-from models.architecture import DualTransformerClassifier, EnhancedDualTransformerClassifier
+import paths
+from audio_utils import segment_audio
+from models.architecture import DualTransformerClassifier, EnhancedDualTransformerClassifier, AdaptedCSATModel, with_adapter_if_available
 from models.explainer import MultimodalExplainer
 
 
@@ -61,6 +63,8 @@ def load_models():
     if os.path.exists(v1_path):
         model_v1.load_state_dict(torch.load(v1_path, map_location=device))
         model_v1.eval()
+        # Stage-2 adapter trained on real uploaded calls (frozen base + new head), if available
+        model_v1 = with_adapter_if_available(model_v1, "models/csat_adapter_v1.pt", device)
 
     # 5. V2 Upgraded Model
     model_v2 = EnhancedDualTransformerClassifier(num_classes=4, audio_dim=768, text_dim=768).to(device)
@@ -68,6 +72,7 @@ def load_models():
     if os.path.exists(v2_path):
         model_v2.load_state_dict(torch.load(v2_path, map_location=device))
         model_v2.eval()
+        model_v2 = with_adapter_if_available(model_v2, "models/csat_adapter_v2.pt", device)
 
     return device, whisper_model, text_model, wavlm_processor, wavlm_model, model_v1, model_v2
 
@@ -76,7 +81,7 @@ device, whisper_model, text_model, wavlm_processor, wavlm_model, model_v1, model
 # -----------------
 # 2. UI INPUT
 # -----------------
-os.makedirs("data/audio/tmp", exist_ok=True)
+os.makedirs(paths.TMP_DIR, exist_ok=True)
 
 
 def get_video_id(url):
@@ -132,8 +137,8 @@ def resolve_audio_source(uploaded_file, recorded_audio, youtube_url, youtube_sub
         file_bytes = uploaded_file.getvalue()
         source_id = f"upload_{hashlib.md5(file_bytes).hexdigest()[:12]}"
         ext = os.path.splitext(uploaded_file.name)[1] or ".bin"
-        raw_path = f"data/audio/tmp/{source_id}{ext}"
-        wav_path = f"data/audio/tmp/{source_id}.wav"
+        raw_path = f"{paths.TMP_DIR}/{source_id}{ext}"
+        wav_path = f"{paths.TMP_DIR}/{source_id}.wav"
         if not os.path.exists(wav_path):
             with open(raw_path, "wb") as f:
                 f.write(file_bytes)
@@ -144,8 +149,8 @@ def resolve_audio_source(uploaded_file, recorded_audio, youtube_url, youtube_sub
     if recorded_audio is not None:
         file_bytes = recorded_audio.getvalue()
         source_id = f"record_{hashlib.md5(file_bytes).hexdigest()[:12]}"
-        raw_path = f"data/audio/tmp/{source_id}_raw.wav"
-        wav_path = f"data/audio/tmp/{source_id}.wav"
+        raw_path = f"{paths.TMP_DIR}/{source_id}_raw.wav"
+        wav_path = f"{paths.TMP_DIR}/{source_id}.wav"
         if not os.path.exists(wav_path):
             with open(raw_path, "wb") as f:
                 f.write(file_bytes)
@@ -158,7 +163,7 @@ def resolve_audio_source(uploaded_file, recorded_audio, youtube_url, youtube_sub
         if not video_id:
             st.error("Invalid YouTube URL.")
             return None
-        wav_path = f"data/audio/tmp/{video_id}.wav"
+        wav_path = f"{paths.TMP_DIR}/{video_id}.wav"
         if not os.path.exists(wav_path):
             with st.spinner("Downloading YouTube Audio..."):
                 cmd = [
@@ -254,11 +259,8 @@ if resolved:
             if not seg_text: continue
 
             full_transcript += f"{seg_text} "
-            start_sample = int(segment["start"] * sr)
-            end_sample = int(segment["end"] * sr)
-            seg_audio = customer_audio_fp32[start_sample:end_sample]
-
-            if len(seg_audio) < 160: continue
+            seg_audio = segment_audio(customer_audio_fp32, segment["start"], segment["end"], sr)
+            if seg_audio is None: continue
 
             # WavLM Acoustic Prosody
             inputs = wavlm_processor(seg_audio, sampling_rate=sr, return_tensors="pt")
@@ -402,14 +404,14 @@ if resolved:
 
     with col1:
         with st.container(border=True):
-            st.markdown("#### 🔹 V1 Baseline (Linear + Mean Pooling)")
+            st.markdown("#### 🔹 V1 Baseline (Linear + Mean Pooling)" + (" + adapter" if isinstance(model_v1, AdaptedCSATModel) else ""))
             st.metric(label="Predicted CSAT", value=pred_v1)
             st.metric(label="Confidence", value=f"{conf_v1:.2f}%")
             st.caption(f"⚡ Latency: {t_v1:.2f}ms on Apple Silicon MPS")
 
     with col2:
         with st.container(border=True):
-            st.markdown("#### 🚀 V2 Upgraded (MLP ResBlock + [CLS] Token)")
+            st.markdown("#### 🚀 V2 Upgraded (MLP ResBlock + [CLS] Token)" + (" + adapter" if isinstance(model_v2, AdaptedCSATModel) else ""))
             st.metric(label="Predicted CSAT", value=pred_v2)
             st.metric(label="Confidence", value=f"{conf_v2:.2f}%", delta=f"{conf_v2 - conf_v1:+.2f}% vs V1")
             st.caption(f"⚡ Latency: {t_v2:.2f}ms on Apple Silicon MPS")

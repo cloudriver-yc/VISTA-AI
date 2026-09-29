@@ -95,5 +95,5 @@ This plan details the design and implementation of an **Explainability & Attribu
    *Verify Top-3 Saliency turns, modality ratio, and text audit display cleanly.*
 
 ### Real-World Audit Verification on Uploaded Calls
-* Run XAI evaluation on `data/audio/uploads/1735404531.458927.mp3`:
+* Run XAI evaluation on `data/real/uploads/audio/1735404531_458927.mp3`:
   * Verify that the XAI layer highlights Turn 120–124 (*"Not available in your country"*) as high saliency, explicitly explaining why the failure overrides the polite sign-off.

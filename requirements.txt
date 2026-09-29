@@ -19,6 +19,6 @@ torchvision
 transformers
 sentence-transformers
 moviepy
-google-genai
+anthropic
 pydantic
 

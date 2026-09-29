@@ -26,8 +26,19 @@ share/python-wheels/
 *.egg
 MANIFEST
 .env
+# Data: audio, caches and features are synced via Hugging Face; metadata/manifests stay tracked
 /data/audio/
+/data/synthetic/tts/
+/data/synthetic/tts_turn_cache/
+/data/synthetic/augmented/
+/data/synthetic/augmented_preview/
+/data/real/youtube/audio/
+/data/real/youtube/captions/
+/data/real/youtube/features_before_label_swap/
+/data/real/uploads/audio/
 /data/features/
+/data/noise/
+/data/tmp/
 /models/
 .agent
 .venv
