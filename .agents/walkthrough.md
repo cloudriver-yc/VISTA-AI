@@ -34,14 +34,12 @@ We have designed, implemented, and verified an end-to-end **Explainable AI (XAI)
   * Table of **Top Pivotal Dialogue Turns** with tone diagnosis tags.
   * Turn-by-Turn **Attention Saliency Timeline** bar chart.
 
-### 4. CLI Inference Tooling (`scripts/05_test_youtube.py`)
-* Upgraded to execute with `return_xai=True` and print formatted decision attribution tables directly to terminal.
 
 ---
 
 ## 2. Verification & Validation Results
 
-### CLI Verification (`python scripts/05_test_youtube.py`)
+### CLI Verification (historical; the CLI script `05_test_youtube.py` has since been removed, use `app.py`)
 Tested on the real-world customer dispute recording:
 * **Predicted Category:** `Very Unsatisfied` (99.57% confidence)
 * **Modality Attribution:** Text Semantics: **50.1%** | Acoustic Prosody: **49.9%** (Balanced cross-modal interaction)
@@ -65,8 +63,3 @@ Tested on the 11.5-minute polite customer call where withdrawal failed:
    streamlit run app.py
    ```
    Upload any audio file or enter a YouTube URL to inspect the interactive XAI gauges, pivotal turning points, and timeline chart.
-
-2. **Run the CLI Pipeline:**
-   ```bash
-   python scripts/05_test_youtube.py
-   ```

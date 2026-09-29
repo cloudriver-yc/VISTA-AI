@@ -295,7 +295,7 @@ def test_on_youtube(spec, device):
         print(f"🎯 YouTube accuracy · stage 1: {acc1:.1f}% ({len(test_files)} calls) | stage 2: {acc2:.1f}%")
     else:
         # No adapter (not trained, or rejected by the synthetic-val guard): stage 2 serves the stage-1 model,
-        # which is also what app.py / 05_test_youtube.py load in that case
+        # which is also what app.py loads in that case
         acc2 = acc1
         print(f"🎯 YouTube accuracy · stage 1: {acc1:.1f}% ({len(test_files)} calls) | stage 2: no adapter, uses stage 1")
     return {"yt_stage1": acc1, "yt_stage2": acc2, "stage2_fallback": not stage2}

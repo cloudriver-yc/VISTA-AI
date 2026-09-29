@@ -52,8 +52,6 @@ VISTA-AI/
 │   ├── 03_synthesize_audio.py     # Converts JSON transcripts to TTS audio via ElevenLabs (--only-missing)
 │   ├── 03b_augment_audio.py       # Acoustic augmentation: mono mixdown, noise, reverb, telephone, speed/pitch
 │   ├── 04_extract_features.py     # Whisper → WavLM + MPNet features (--only syn,aug,yt --skip-existing)
-│   ├── 05_test_youtube.py         # Side-by-side V1 vs V2 validation script with telemetry
-│   ├── evaluate_asr.py            # Evaluates Whisper ASR accuracy vs YouTube captions (WER)
 │   ├── ingest_youtube_dataset.py  # Ingests YouTube playlists, removes B-roll & extracts features
 │   ├── ingest_upload.py           # Adds a labelled real uploaded call (audio -> features + metadata) for stage 2
 │   ├── migrate_data_layout.py     # Moves the legacy data/ layout to the current one (idempotent)
@@ -118,7 +116,7 @@ python src/train.py --stage all --rebuild_split
 2. **Stage 2: freeze + new layers on uploaded calls** (`--stage finetune`). The stage-1 model is frozen and a `ResidualAdapterHead` (LayerNorm → Linear 512→64 → GELU → Dropout → Linear 64→4) is added on its 512-d call summary (V1 pooled vector / V2 `[CLS]`). Its output is added to the frozen logits, and its last layer is zero-initialised, so before training it predicts exactly what stage 1 predicts. Only the adapter trains, on the uploaded calls (`upload_*`, full batch, `--ft_epochs 30`, `--ft_lr 1e-3`). The script asserts the frozen weights are unchanged and saves `models/csat_adapter_v{1,2}.pt`. Two safeguards stop the adapter from overfitting a handful of uploads (without them it collapsed V2 to predicting "Unsatisfied" for 10 of 19 YouTube calls and cut its synthetic-val accuracy from 99.4% to 73.1%): an **anchor** KL penalty (`--ft_anchor_weight 1.0`) keeps the adapted predictions close to the frozen model's on 512 synthetic training calls, and a **guard** rejects the adapter (falling back to stage 1) if it lowers synthetic-val accuracy by more than `--ft_max_val_drop 1.0` points. Neither looks at YouTube, so the test set stays clean.
 3. **Stage 3: test on YouTube.** Every YouTube call is scored by both the stage-1 model and the stage-2 model, and the final table shows `YT stage1`, `YT stage2` and the difference.
 
-`app.py` and `05_test_youtube.py` automatically use the adapter when `models/csat_adapter_v{1,2}.pt` exists ("+ adapter" in the UI). Re-running `--stage pretrain` alone deletes old adapters, since they belong to the previous stage-1 model.
+`app.py` automatically uses the adapter when `models/csat_adapter_v{1,2}.pt` exists ("+ adapter" in the UI). Re-running `--stage pretrain` alone deletes old adapters, since they belong to the previous stage-1 model.
 
 **Adding uploaded calls** (stage-2 data), then retraining only the adapter:
 ```bash
@@ -127,10 +125,6 @@ python src/train.py --stage finetune --rebuild_split
 ```
 
 ### Step 5: Side-by-Side Inference & Telemetry
-- **CLI Comparative Test with Telemetry:**
-  ```bash
-  python scripts/05_test_youtube.py
-  ```
 - **Streamlit Web Dashboard:**
   ```bash
   streamlit run app.py
@@ -179,7 +173,6 @@ python scripts/04_extract_features.py --only syn,aug --skip-existing
 python src/train.py --stage all --rebuild_split
 #    Later, after adding uploads with scripts/ingest_upload.py, retrain only the adapter:
 #    python src/train.py --stage finetune --rebuild_split
-# 6. Check
-python scripts/05_test_youtube.py
+# 6. Check in the app
 streamlit run app.py
 ```
