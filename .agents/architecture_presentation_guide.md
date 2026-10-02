@@ -49,12 +49,12 @@ graph TD
     end
 
     subgraph S4["4. Feature Adaptation & Domain Projection"]
-        Proj_A["Linear(768 -> 512) + LayerNorm + GELU + MLPResBlock"]
-        Proj_T["Linear(768 -> 512) + LayerNorm + GELU + MLPResBlock"]
+        Proj_A["Linear(768 -> 256) + LayerNorm + GELU + MLPResBlock"]
+        Proj_T["Linear(768 -> 256) + LayerNorm + GELU + MLPResBlock"]
         H_audio --> Proj_A
         H_text --> Proj_T
-        Z_audio["Adapted Audio z_A in R^(S x 512)"]
-        Z_text["Adapted Text z_T in R^(S x 512)"]
+        Z_audio["Adapted Audio z_A in R^(S x 256)"]
+        Z_text["Adapted Text z_T in R^(S x 256)"]
         Proj_A --> Z_audio
         Proj_T --> Z_text
     end
@@ -66,26 +66,26 @@ graph TD
         Z_text --> CA_TA
         Z_audio --> CA_AT
         Z_text --> CA_AT
-        Norm_Fuse["LayerNorm + Concat(512+512) -> Linear(1024 -> 512) + GELU"]
+        Norm_Fuse["LayerNorm + Concat(256+256) -> Linear(512 -> 256) + GELU"]
         CA_TA --> Norm_Fuse
         CA_AT --> Norm_Fuse
-        Fused_Seq["Fused Dialogue Sequence F in R^(S x 512)"]
+        Fused_Seq["Fused Dialogue Sequence F in R^(S x 256)"]
         Norm_Fuse --> Fused_Seq
     end
 
     subgraph S6["6. Conversational Sequence Transformer"]
-        CLS["Prepend Learnable [CLS] Token z_0 in R^(1 x 512)"]
+        CLS["Prepend Learnable [CLS] Token z_0 in R^(1 x 256)"]
         PE["Sinusoidal Positional Encoding (up to 1024 turns)"]
         Fused_Seq --> CLS
         CLS --> PE
-        Seq_Trans["2-Layer Transformer Encoder (d_model=512, nhead=8, d_ff=1024, Dropout=0.2)"]
+        Seq_Trans["2-Layer Transformer Encoder (d_model=256, nhead=8, d_ff=512, Dropout=0.2)"]
         PE --> Seq_Trans
         Global_Rep["Global Representation: h_CLS (V2) or Masked Mean Pool (V1)"]
         Seq_Trans --> Global_Rep
     end
 
     subgraph S7["7. Classification Head & CSAT Output"]
-        Head["Linear(512 -> 128) + LayerNorm + GELU + Dropout(0.3) -> Linear(128 -> 4)"]
+        Head["Linear(256 -> 128) + LayerNorm + GELU + Dropout(0.3) -> Linear(128 -> 4)"]
         Global_Rep --> Head
         Softmax["Softmax Probs: [Very Unsatisfied, Unsatisfied, Satisfied, Very Satisfied]"]
         Head --> Softmax
@@ -114,8 +114,8 @@ graph LR
 
     TRAIN --> S1["Stage 1: pretrain V1 / V2 (all weights trainable)"]
     VAL --> S1
-    S1 --> FROZEN["Frozen stage-1 model: encode() gives a 512-d call summary"]
-    FROZEN --> ADAPT["Stage 2: ResidualAdapterHead (LayerNorm, 512 to 64, GELU, 64 to 4, zero-init)"]
+    S1 --> FROZEN["Frozen stage-1 model: encode() gives a 256-d call summary"]
+    FROZEN --> ADAPT["Stage 2: ResidualAdapterHead (LayerNorm, 256 to 64, GELU, 64 to 4, zero-init)"]
     FT --> ADAPT
     FROZEN --> SUM["Adapted logits = frozen logits + adapter output"]
     ADAPT --> SUM
@@ -123,7 +123,7 @@ graph LR
     TEST --> S3
 ```
 
-**Why freeze the model and add a zero-initialised residual adapter?** There are only a handful of real uploaded calls. Fine-tuning all 7.7M (V1) or 9.8M (V2) parameters on them would overwrite what the model learned from thousands of synthetic dialogues, so the pretrained model is frozen and only a small head (34k parameters) learns a correction from real audio. The head's output is added to the frozen logits, and its last layer starts at zero, so the adapted model begins exactly at the stage-1 model and can only move where the real calls push it. Scoring both stages on the same YouTube calls shows directly whether the real-data adaptation helped. With only two uploads, the head can separate them along almost any direction and then shift every other call the same way (unconstrained, it pushed V2 to predict "Unsatisfied" for 10 of 19 YouTube calls and cut its synthetic-validation accuracy from 99.4% to 73.1%). So stage 2 adds a KL "anchor" that keeps predictions on synthetic calls close to the frozen model's, and a guard that rejects the head if it lowers synthetic validation accuracy. Both use only synthetic data, never the YouTube test set.
+**Why freeze the model and add a zero-initialised residual adapter?** There are only a handful of real uploaded calls. Fine-tuning all 2.1M (V1) or 2.7M (V2) parameters on them would overwrite what the model learned from thousands of synthetic dialogues, so the pretrained model is frozen and only a small head (17k parameters) learns a correction from real audio. The head's output is added to the frozen logits, and its last layer starts at zero, so the adapted model begins exactly at the stage-1 model and can only move where the real calls push it. Scoring both stages on the same YouTube calls shows directly whether the real-data adaptation helped. With only two uploads, the head can separate them along almost any direction and then shift every other call the same way (unconstrained, it pushed V2 to predict "Unsatisfied" for 10 of 19 YouTube calls and cut its synthetic-validation accuracy from 99.4% to 73.1%). So stage 2 adds a KL "anchor" that keeps predictions on synthetic calls close to the frozen model's, and a guard that rejects the head if it lowers synthetic validation accuracy. Both use only synthetic data, never the YouTube test set.
 
 ---
 
@@ -146,7 +146,7 @@ An end-to-end **Hierarchical Multimodal Cross-Attention Transformer** that predi
 2. **Dual Pre-trained Encoding:**
    - **Acoustic:** `microsoft/wavlm-base-plus` extracts 768-d frame representations, mean-pooled temporally per turn into $\mathbf{a}_s \in \mathbb{R}^{768}$.
    - **Linguistic:** `all-mpnet-base-v2` encodes the transcript text into $\mathbf{t}_s \in \mathbb{R}^{768}$.
-3. **Pre-LN Residual Adaptation (`MLPResBlock`):** Projects $768 \to 512$ and adapts static embeddings into the customer service task domain.
+3. **Pre-LN Residual Adaptation (`MLPResBlock`):** Projects $768 \to 256$ and adapts static embeddings into the customer service task domain.
 4. **Bidirectional Cross-Modal Attention:**
    $$\mathbf{t}_{\text{attended}} = \text{Softmax}\left(\frac{\mathbf{z}_T \mathbf{z}_A^T}{\sqrt{d_k}}\right)\mathbf{z}_A, \quad \mathbf{a}_{\text{attended}} = \text{Softmax}\left(\frac{\mathbf{z}_A \mathbf{z}_T^T}{\sqrt{d_k}}\right)\mathbf{z}_T$$
 5. **Turn-Level Sequence Transformer:** Models multi-turn emotional escalation and resolution progression with Sinusoidal Positional Encoding and multi-head self-attention.
@@ -164,7 +164,7 @@ An end-to-end **Hierarchical Multimodal Cross-Attention Transformer** that predi
 | :--- | :--- | :--- | :--- |
 | **Acoustic Feature Extraction** | Static 2D Log-Mel Spectrograms ($128 \times T$) | **WavLM-base-plus (768-d self-supervised prosody)** | **WavLM-base-plus (768-d self-supervised prosody)** |
 | **Linguistic Feature Extraction** | Flat TF-IDF / 1D Text ConvNet | **all-mpnet-base-v2 (768-d sentence embeddings)** | **all-mpnet-base-v2 (768-d sentence embeddings)** |
-| **Modality Projection Layer** | Flat Conv2D / Dense Layers | Linear + LayerNorm + GELU ($768 \to 512$) | **Pre-LN 2-Layer `MLPResBlock` ($768 \to 512 \to 1024 \to 512$)** |
+| **Modality Projection Layer** | Flat Conv2D / Dense Layers | Linear + LayerNorm + GELU ($768 \to 256$) | **Pre-LN 2-Layer `MLPResBlock` ($768 \to 256 \to 512 \to 256$)** |
 | **Cross-Modal Interaction** | None (Late concatenation of flattened vectors) | **Bidirectional Multi-Head Cross-Attention** | **Bidirectional Multi-Head Cross-Attention** |
 | **Conversational Sequence Modeling** | Flattened Global Pooling (No temporal sequence) | **2-Layer Sequence Transformer (Mean Pooling)** | **2-Layer Sequence Transformer (`[CLS]` Token)** |
 | **Positional Encoding** | None | Sinusoidal ($max\_len=1024$) | Sinusoidal ($max\_len=1024$) |
@@ -202,13 +202,14 @@ An end-to-end **Hierarchical Multimodal Cross-Attention Transformer** that predi
 
 ## 3. Mathematical & Hyperparameter Design Decisions (Presentation "Shining Points")
 
-### Shining Point 1: Why Dimension $d_{\text{model}} = 512$?
-* **The Information Bottleneck Principle:** Both `WavLM` and `MPNet` output 768-dimensional vectors ($768 + 768 = 1536$ concatenated). Projecting down to $d_{\text{model}} = 512$ acts as an information bottleneck:
+### Shining Point 1: Why Dimension $d_{\text{model}} = 256$?
+* **The Information Bottleneck Principle:** Both `WavLM` and `MPNet` output 768-dimensional vectors ($768 + 768 = 1536$ concatenated). Projecting down to $d_{\text{model}} = 256$ acts as an information bottleneck:
   $$\min I(X; Z) \quad \text{s.t.} \quad \max I(Z; Y)$$
   This forces the network to strip away generic phonetic and syntactic noise, preserving only task-salient affective features.
-* **Multi-Head Attention Geometry:** 512 is divisible by $n_{\text{head}} = 8$, yielding per-head projection dimensions of:
-  $$d_k = \frac{d_{\text{model}}}{n_{\text{head}}} = \frac{512}{8} = 64$$
-  A head dimension of $d_k = 64$ matches the standard scaled dot-product attention scaling factor $\frac{1}{\sqrt{d_k}} = \frac{1}{8} = 0.125$, preventing softmax saturation and vanishing gradients in attention maps.
+* **Multi-Head Attention Geometry:** 256 is divisible by $n_{\text{head}} = 8$, yielding per-head projection dimensions of:
+  $$d_k = \frac{d_{\text{model}}}{n_{\text{head}}} = \frac{256}{8} = 32$$
+  Attention scores are scaled by $\frac{1}{\sqrt{d_k}} = \frac{1}{\sqrt{32}} \approx 0.177$, which keeps the softmax from saturating.
+* **Capacity Matching (empirical):** Halving $d_{\text{model}}$ from 512 cut the models from 7.7M / 9.8M to 2.1M / 2.7M parameters (V1 / V2). On the same split, held-out YouTube accuracy rose from 78.9% to 89.5% (V1) and 100% (V2), with synthetic val unchanged or higher (99.2% / 99.4%). With only 19 test calls this is one run, but it suggests the smaller width transfers better from synthetic to real calls.
 
 ---
 
@@ -216,14 +217,14 @@ An end-to-end **Hierarchical Multimodal Cross-Attention Transformer** that predi
 * **Hierarchical Conversational Semantics:**
   - **Layer 1 (Local Interaction):** Attends to adjacent turn pairs (e.g., *Customer Complaint $\leftrightarrow$ Agent Response*).
   - **Layer 2 (Global Discourse Arc):** Attends across distant turns (e.g., *Turn 1 Grievance $\leftrightarrow$ Turn 30 Final Resolution*).
-* **Occam's Razor & Capacity Matching:** With $\sim 300$ dialogue training samples, a 6-layer Transformer would have $\approx 18\text{M}$ trainable parameters in the sequence backbone, leading to severe memorization/overfitting. A 2-layer encoder ($\approx 6.3\text{M}$ trainable parameters) achieves optimal capacity balance without overfitting.
+* **Occam's Razor & Capacity Matching:** With $\sim 300$ dialogue training samples, a 6-layer Transformer would have $\approx 3.2\text{M}$ trainable parameters in the sequence backbone, more than the whole current model, leading to memorization/overfitting. A 2-layer encoder ($\approx 1.05\text{M}$ trainable parameters) achieves optimal capacity balance without overfitting.
 
 ---
 
 ### Shining Point 3: Pre-LN Residual MLP (`MLPResBlock`)
 * **Mathematical Formulation:**
   $$\mathbf{h} = \mathbf{x} + \mathbf{W}_2 \cdot \text{Dropout}\big(\text{GELU}(\text{LayerNorm}(\mathbf{W}_1 \mathbf{x} + \mathbf{b}_1))\big) + \mathbf{b}_2$$
-  where $\mathbf{W}_1 \in \mathbb{R}^{1024 \times 512}$ and $\mathbf{W}_2 \in \mathbb{R}^{512 \times 1024}$.
+  where $\mathbf{W}_1 \in \mathbb{R}^{512 \times 256}$ and $\mathbf{W}_2 \in \mathbb{R}^{256 \times 512}$.
 * **Why Pre-LN over Post-LN?**
   - In Post-LN ($\mathbf{y} = \text{LN}(\mathbf{x} + f(\mathbf{x}))$), the normalization scale diminishes gradients on the identity branch as depth increases.
   - In Pre-LN, the identity path is strictly linear ($\frac{\partial \mathbf{y}}{\partial \mathbf{x}} = \mathbf{I} + \frac{\partial f}{\partial \mathbf{x}}$), establishing an unobstructed gradient highway during backpropagation on Apple Silicon MPS.
