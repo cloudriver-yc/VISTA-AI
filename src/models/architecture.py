@@ -10,7 +10,7 @@ class CrossModalAttention(nn.Module):
     - Text queries Audio features (acoustic-grounded semantics)
     - Audio queries Text features (semantic-grounded prosody)
     """
-    def __init__(self, d_model=512, nhead=8, dropout=0.1):
+    def __init__(self, d_model=256, nhead=8, dropout=0.1):
         super().__init__()
         self.text_cross_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=True)
         self.audio_cross_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=True)
@@ -41,7 +41,7 @@ class CrossModalAttention(nn.Module):
 
 
 class SinusoidalPositionalEncoding(nn.Module):
-    def __init__(self, d_model=512, max_len=1024):
+    def __init__(self, d_model=256, max_len=1024):
         super().__init__()
         pe = torch.zeros(max_len, d_model)
         position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
@@ -72,7 +72,7 @@ class MLPResBlock(nn.Module):
     h = x + Dropout(Linear2(GELU(LayerNorm(Linear1(x)))))
     Allows non-linear adaptation of pre-trained embeddings while stabilizing gradient flow.
     """
-    def __init__(self, d_model=512, hidden_dim=1024, dropout=0.1):
+    def __init__(self, d_model=256, hidden_dim=1024, dropout=0.1):
         super().__init__()
         self.block = nn.Sequential(
             nn.LayerNorm(d_model),
@@ -95,7 +95,7 @@ class DualTransformerClassifier(nn.Module):
     - Conversational Sequence Transformer Encoder
     - Mean-Pooled CSAT Classification Head
     """
-    def __init__(self, num_classes=4, audio_dim=768, text_dim=768, d_model=512, nhead=8, num_layers=2, max_len=1024, dropout=0.3):
+    def __init__(self, num_classes=4, audio_dim=768, text_dim=768, d_model=256, nhead=8, num_layers=2, max_len=1024, dropout=0.3):
         super().__init__()
         self.d_model = d_model
         
@@ -260,7 +260,7 @@ class EnhancedDualTransformerClassifier(nn.Module):
     - Conversational Sequence Transformer Encoder
     - CSAT Classification from [CLS] Token Representation
     """
-    def __init__(self, num_classes=4, audio_dim=768, text_dim=768, d_model=512, nhead=8, num_layers=2, max_len=1024, dropout=0.3):
+    def __init__(self, num_classes=4, audio_dim=768, text_dim=768, d_model=256, nhead=8, num_layers=2, max_len=1024, dropout=0.3):
         super().__init__()
         self.d_model = d_model
         
@@ -429,7 +429,7 @@ class ResidualAdapterHead(nn.Module):
     Its output is added to the frozen model's logits. The last layer is zero-initialised,
     so before any training the adapted model predicts exactly what the base model predicts.
     """
-    def __init__(self, d_model=512, hidden_dim=64, num_classes=4, dropout=0.3):
+    def __init__(self, d_model=256, hidden_dim=64, num_classes=4, dropout=0.3):
         super().__init__()
         self.hidden = nn.Sequential(
             nn.LayerNorm(d_model),

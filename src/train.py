@@ -41,7 +41,7 @@ def build_base(spec, device):
         num_classes=4,
         audio_dim=768,
         text_dim=768,
-        d_model=512,
+        d_model=256,
         nhead=8,
         num_layers=2,
         dropout=0.3
@@ -177,7 +177,7 @@ def pretrain(spec, device, epochs=25, batch_size=16, lr=2e-4):
 # Stage 2: freeze the stage-1 model, train only the adapter on uploaded real calls
 # ---------------------------------------------------------------------------
 def summarize_files(base, files, device):
-    """Frozen-base 512-d summaries, base logits and labels for each file (single-dialogue, no padding)."""
+    """Frozen-base 256-d summaries, base logits and labels for each file (single-dialogue, no padding)."""
     summaries, logits, labels = [], [], []
     with torch.no_grad():
         for f in files:
