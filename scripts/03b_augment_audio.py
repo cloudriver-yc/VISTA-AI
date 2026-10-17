@@ -8,6 +8,12 @@ speed / pitch / reverb / background noise / telephone channel / gain perturbatio
 Output: data/synthetic/augmented/{source_id}__aug{NN}.flac + manifest.jsonl (labels + exact params).
 The number of variants is class-balanced and spread evenly across unique scripts, so
 re-voiced script copies (dial_aug_*) do not dominate the augmented pool.
+
+With --uploads N it instead makes N variants of every real uploaded call (data/real/uploads/audio/, already mono)
+with the same recipe: data/real/uploads/augmented/{upload_id}__aug{NN}.flac + manifest.jsonl. With
+--youtube ID [ID ...] --youtube-variants N it does the same for chosen YouTube calls:
+data/real/youtube/augmented/{video_id}__aug{NN}.flac. Their features (04_extract_features.py --only upl_aug,yt_aug)
+follow the original's split: finetune/, or excluded/ for a test call.
 """
 import os
 import io
@@ -18,6 +24,7 @@ import glob
 import zipfile
 import hashlib
 import argparse
+import subprocess
 import urllib.request
 from collections import defaultdict
 
@@ -295,6 +302,75 @@ def augment(stereo, params, rng, source_id, turn_clips):
 
 
 # ---------------------------------------------------------------------------
+# Real uploaded calls
+# ---------------------------------------------------------------------------
+def load_upload_mono(audio_path):
+    """Decodes an uploaded recording (mp3, m4a, ...) to 16 kHz mono float32 with ffmpeg, like ingest_upload.py."""
+    out = subprocess.run(["ffmpeg", "-v", "error", "-i", audio_path, "-ar", str(SR), "-ac", "1", "-f", "f32le", "-"],
+                         check=True, capture_output=True).stdout
+    return np.frombuffer(out, dtype=np.float32).copy()
+
+
+def augment_real_calls(calls, n_variants, seed, esc50_files, turn_clips, out_dir, manifest_path):
+    """
+    n_variants recorded-recipe copies of each real call. calls: dicts with source_id (the original's
+    feature-file stem), stem (output file prefix), audio_path and label (class name). The manifest keeps
+    entries of calls not in this run, so calls can be augmented one at a time.
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    done = {c["source_id"] for c in calls}
+    manifest = []
+    if os.path.exists(manifest_path):
+        with open(manifest_path, encoding="utf-8") as f:
+            manifest = [r for r in (json.loads(l) for l in f if l.strip()) if r["source_id"] not in done]
+    n_written = 0
+    for c in tqdm(calls, desc="Augmenting real calls"):
+        audio = None
+        for idx in range(n_variants):
+            variant_seed = int(hashlib.sha1(f"{seed}:{c['source_id']}:{idx}".encode()).hexdigest()[:8], 16)
+            rng = np.random.default_rng(variant_seed)
+            # "mono": real calls are one mixed channel, so there are no per-speaker gains to draw
+            params = sample_params(rng, "mono", esc50_files, bool(turn_clips))
+            filename = f"{c['stem']}__aug{idx:02d}.flac"
+            out_path = os.path.join(out_dir, filename)
+            if not os.path.exists(out_path):
+                if audio is None:
+                    audio = load_upload_mono(c["audio_path"])
+                sf.write(out_path, augment(audio, params, rng, c["source_id"], turn_clips), SR)
+                n_written += 1
+            manifest.append({"file": filename, "source_id": c["source_id"], "label": c["label"],
+                             "seed": variant_seed, "params": params})
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        for rec in manifest:
+            f.write(json.dumps(rec) + "\n")
+    print(f"🎉 Real-call augmentation: {len(calls)} calls x {n_variants} = {len(calls) * n_variants} clips "
+          f"({n_written} new) in '{out_dir}'")
+
+
+def upload_calls():
+    """Every labelled upload in data/real/uploads/metadata.jsonl."""
+    with open(paths.UPLOADS_METADATA_PATH, encoding="utf-8") as f:
+        uploads = [json.loads(l) for l in f if l.strip()]
+    return [{"source_id": f"upload_{u['upload_id']}", "stem": u["upload_id"], "label": CLASSES[u["label"]],
+             "audio_path": os.path.join(paths.UPLOADS_AUDIO_DIR, u["audio_file"])} for u in uploads if "label" in u]
+
+
+def youtube_calls(video_ids):
+    """YouTube calls by video id (or yt_<id>); the label comes from the call's feature file (project convention)."""
+    import torch
+    calls = []
+    for vid in video_ids:
+        vid = vid.removeprefix("yt_")
+        feature = paths.find_feature(f"yt_{vid}.pt")
+        if feature is None:
+            sys.exit(f"No feature file for yt_{vid}.pt; extract it first (04_extract_features.py --only yt).")
+        label = int(torch.load(feature, map_location="cpu")["label"])
+        calls.append({"source_id": f"yt_{vid}", "stem": vid, "label": CLASSES[label],
+                      "audio_path": os.path.join(paths.YOUTUBE_AUDIO_DIR, f"{vid}.wav")})
+    return calls
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main():
@@ -306,6 +382,11 @@ def main():
     parser.add_argument("--preview", type=int, default=0,
                         help="Write only N sample clips as WAV to data/synthetic/augmented_preview/ for listening")
     parser.add_argument("--download-noise", action="store_true", help="Download ESC-50 background noise before augmenting")
+    parser.add_argument("--uploads", type=int, default=0, metavar="N",
+                        help="Instead of the synthetic pool, make N variants of every real uploaded call")
+    parser.add_argument("--youtube", nargs="+", metavar="VIDEO_ID",
+                        help="Instead of the synthetic pool, make --youtube-variants variants of these YouTube calls")
+    parser.add_argument("--youtube-variants", type=int, default=5, help="Variants per call with --youtube")
     args = parser.parse_args()
 
     if args.download_noise:
@@ -315,6 +396,14 @@ def main():
     turn_clips = list_turn_clips()
     if not esc50_files:
         print("⚠️ ESC-50 not found; using procedural noise only (run with --download-noise to add it).")
+    if args.uploads or args.youtube:
+        if args.uploads:
+            augment_real_calls(upload_calls(), args.uploads, args.seed, esc50_files, turn_clips,
+                               paths.UPLOADS_AUGMENTED_DIR, paths.UPLOADS_AUGMENTED_MANIFEST_PATH)
+        if args.youtube:
+            augment_real_calls(youtube_calls(args.youtube), args.youtube_variants, args.seed, esc50_files, turn_clips,
+                               paths.YOUTUBE_AUGMENTED_DIR, paths.YOUTUBE_AUGMENTED_MANIFEST_PATH)
+        return
 
     sources = load_sources()
     jobs = build_jobs(sources, args.target, args.seed)

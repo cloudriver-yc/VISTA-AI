@@ -116,8 +116,8 @@ def check_torchvision():
 def check_project_models():
     from models.architecture import (DualTransformerClassifier, EnhancedDualTransformerClassifier,
                                      ResidualAdapterHead, AdaptedCSATModel)
-    feature = next((os.path.join(paths.FEATURES_DIR, f) for f in sorted(os.listdir(paths.FEATURES_DIR))
-                    if f.endswith(".pt")), None) if os.path.isdir(paths.FEATURES_DIR) else None
+    feature = next((os.path.join(d, f) for d in paths.feature_dirs() if os.path.isdir(d)
+                    for f in sorted(os.listdir(d)) if f.endswith(".pt")), None)
     if feature:
         data = torch.load(feature, map_location="cpu")
         text, audio, source = data["text_embeds"][None], data["audio_embeds"][None], os.path.basename(feature)

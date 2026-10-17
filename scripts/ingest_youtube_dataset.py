@@ -18,7 +18,7 @@ from audio_utils import segment_audio
 YTDLP_BIN = os.path.abspath(".venv/bin/yt-dlp")
 AUDIO_OUT_DIR = paths.YOUTUBE_AUDIO_DIR
 CAPTIONS_DIR = paths.YOUTUBE_CAPTIONS_DIR
-FEATURES_DIR = paths.FEATURES_DIR
+FEATURES_DIR = paths.feature_split_dir("test")  # YouTube calls are the test set
 METADATA_FILE = paths.YOUTUBE_METADATA_PATH
 
 # The playlists were curated with the everyday meaning of their names ("very_unsatisfied" = angry

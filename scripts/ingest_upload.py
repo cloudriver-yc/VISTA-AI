@@ -5,7 +5,7 @@ Adds a real uploaded call to the stage-2 (finetune) pool.
 
 1. Copies the audio to data/real/uploads/audio/<id>.<ext>
 2. Converts it to 16 kHz mono WAV with ffmpeg (same as app.py)
-3. Extracts Whisper + WavLM + MPNet features to data/features/upload_<id>.pt
+3. Extracts Whisper + WavLM + MPNet features to data/features/finetune/upload_<id>.pt
 4. Records it in data/real/uploads/metadata.jsonl
 
 Then retrain only the adapter: python src/train.py --stage finetune --rebuild_split
@@ -40,7 +40,7 @@ def main():
     upload_id = (args.id or stem).replace(".", "_").replace(" ", "_")
     audio_dest = os.path.join(paths.UPLOADS_AUDIO_DIR, f"{upload_id}{ext.lower()}")
     feature_file = f"upload_{upload_id}.pt"
-    feature_path = os.path.join(paths.FEATURES_DIR, feature_file)
+    feature_path = paths.feature_output_path(feature_file)
     if os.path.exists(feature_path) and not args.force:
         sys.exit(f"{feature_path} already exists. Use --force to overwrite, or --id to pick another id.")
 
@@ -59,7 +59,7 @@ def main():
     extractors = load_extractors(get_device())
     audio_emb, text_emb = extract_features_from_audio(wav_path, **extractors)
     label = LABEL_MAP[args.label]
-    os.makedirs(paths.FEATURES_DIR, exist_ok=True)
+    os.makedirs(os.path.dirname(feature_path), exist_ok=True)
     torch.save({
         "audio_embeds": audio_emb,
         "text_embeds": text_emb,

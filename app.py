@@ -166,17 +166,27 @@ def resolve_audio_source(uploaded_file, recorded_audio, youtube_url, youtube_sub
         wav_path = f"{paths.TMP_DIR}/{video_id}.wav"
         if not os.path.exists(wav_path):
             with st.spinner("Downloading YouTube Audio..."):
+                # Run yt-dlp from this interpreter's env so it works without an activated .venv
                 cmd = [
-                    "yt-dlp",
+                    sys.executable, "-m", "yt_dlp",
                     "-x", "--audio-format", "wav",
                     "--postprocessor-args", "-ar 16000 -ac 1",
                     "-o", wav_path.replace(".wav", ""),
                     youtube_url
                 ]
                 try:
-                    subprocess.run(cmd, check=True, capture_output=True)
-                except subprocess.CalledProcessError:
-                    st.error("YouTube blocked automated download (HTTP 429). Please run manual download with browser cookies.")
+                    subprocess.run(cmd, check=True, capture_output=True, text=True)
+                except subprocess.CalledProcessError as e:
+                    errors = [l for l in e.stderr.splitlines() if l.startswith("ERROR")] or e.stderr.strip().splitlines()[-1:]
+                    reason = errors[-1] if errors else f"yt-dlp exited with code {e.returncode}"
+                    if "429" in e.stderr or "Sign in to confirm" in e.stderr:
+                        st.error("YouTube blocked automated download (rate limit / bot check). "
+                                 "Download the audio manually with browser cookies "
+                                 "(`yt-dlp --cookies-from-browser chrome -x --audio-format wav <url>`) and upload the file.")
+                    elif "ffmpeg not found" in e.stderr or "ffprobe" in e.stderr:
+                        st.error("yt-dlp needs ffmpeg to convert the audio. Install it with `brew install ffmpeg` and restart the app.")
+                    else:
+                        st.error(f"YouTube download failed: {reason}")
                     return None
         else:
             st.info("Audio cached locally.")

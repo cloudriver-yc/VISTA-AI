@@ -7,10 +7,11 @@ Syncs VISTA-AI data and models with a private Hugging Face dataset repo, in the 
 
 Parts (default: all):
   metadata         dialogues.jsonl (+ backups), split manifests, YouTube / uploads metadata
-  features         data/features/*.pt (+ YouTube pre-label-swap backups): all you need to train (always mirrored)
+  features         data/features/{train,val,finetune,test,unassigned}/*.pt (+ YouTube pre-label-swap backups):
+                   all you need to train (always mirrored)
   models           stage-1 weights + stage-2 adapters (always mirrored)
   synthetic-audio  TTS WAVs, per-turn TTS cache, augmented FLACs + manifest
-  real-audio       YouTube audio + captions, uploaded call recordings
+  real-audio       YouTube audio + captions, uploaded call recordings + augmented copies of real calls
 
 Not synced: data/tmp/ (scratch), data/noise/ (ESC-50, re-download with 03b_augment_audio.py --download-noise),
 data/synthetic/augmented_preview/ (listening QA only).
@@ -54,6 +55,8 @@ PARTS = {
         f"{paths.YOUTUBE_AUDIO_DIR}/*",
         f"{paths.YOUTUBE_CAPTIONS_DIR}/*",
         f"{paths.UPLOADS_AUDIO_DIR}/*",
+        f"{paths.UPLOADS_AUGMENTED_DIR}/*",
+        f"{paths.YOUTUBE_AUGMENTED_DIR}/*",
     ],
 }
 IGNORE = ["*.DS_Store", "*/__pycache__/*", "*.tmp"]

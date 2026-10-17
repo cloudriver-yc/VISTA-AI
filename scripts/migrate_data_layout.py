@@ -13,8 +13,9 @@ data/youtube_metadata.jsonl             ->  data/real/youtube/metadata.jsonl
 data/audio/uploads/<ts>.<ext>           ->  data/real/uploads/audio/<ts with '.'->'_'>.<ext>  (+ metadata.jsonl)
 data/train_test_split[.v1].json         ->  data/split_manifest[.v1].json
 
+data/features/*.pt (flat)               ->  data/features/{train,val,finetune,test,unassigned}/  (split from the manifest)
+
 Idempotent: safe to re-run (e.g. after `hf_dataset_sync.py download` pulls the legacy layout).
-Features (data/features/) and the paths stored in the split manifest are unchanged.
 """
 import os
 import sys
@@ -73,7 +74,7 @@ def write_uploads_metadata(dry_run):
     records = []
     for audio in sorted(glob.glob(os.path.join(paths.UPLOADS_AUDIO_DIR, "*"))):
         stem = os.path.splitext(os.path.basename(audio))[0]
-        feature = os.path.join(paths.FEATURES_DIR, f"upload_{stem}.pt")
+        feature = paths.feature_output_path(f"upload_{stem}.pt")
         rec = {"upload_id": stem, "audio_file": os.path.basename(audio), "feature_file": os.path.basename(feature)}
         if os.path.exists(feature):
             label = torch.load(feature, map_location="cpu")["label"]
@@ -126,6 +127,10 @@ def main():
     # Split manifest
     m.move("data/train_test_split.json", paths.SPLIT_MANIFEST_PATH)
     m.move("data/train_test_split.v1.json", paths.SPLIT_MANIFEST_PATH.replace(".json", ".v1.json"))
+
+    # Features: flat data/features/*.pt -> split folders (needs src/ on the path for data.dataset)
+    from data.dataset import organize_flat_features
+    m.moved += organize_flat_features(dry_run=args.dry_run)
 
     write_uploads_metadata(args.dry_run)
     for legacy in ["data/audio", "data/raw"]:

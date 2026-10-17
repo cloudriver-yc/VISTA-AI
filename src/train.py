@@ -2,8 +2,8 @@
 Two-stage training recipe:
   Stage 1 (pretrain): train V1/V2 on synthetic TTS + augmented data (train/val split).
   Stage 2 (finetune): freeze the stage-1 model, add a ResidualAdapterHead on top and train only
-                      the adapter on real uploaded calls (finetune split).
-  Stage 3 (test):     evaluate stage-1 and stage-2 models on the YouTube calls (test split).
+                      the adapter on real calls (finetune split: uploads / YouTube calls + their augmented copies).
+  Stage 3 (test):     evaluate stage-1 and stage-2 models on the real test calls (test split).
 """
 import os
 import copy
@@ -174,7 +174,7 @@ def pretrain(spec, device, epochs=25, batch_size=16, lr=2e-4):
 
 
 # ---------------------------------------------------------------------------
-# Stage 2: freeze the stage-1 model, train only the adapter on uploaded real calls
+# Stage 2: freeze the stage-1 model, train only the adapter on real calls (finetune split)
 # ---------------------------------------------------------------------------
 def summarize_files(base, files, device):
     """Frozen-base 256-d summaries, base logits and labels for each file (single-dialogue, no padding)."""
@@ -194,21 +194,21 @@ def finetune(spec, device, epochs=30, lr=1e-3, weight_decay=1e-2, seed=42,
     """
     Trains only the adapter on uploaded calls. With a handful of uploads the adapter can separate them
     along almost any feature direction and then shift every other call the same way (it collapsed V2
-    to predicting 'Unsatisfied'). Two safeguards, neither of which looks at the YouTube test set:
+    to predicting 'Unsatisfied'). Two safeguards, neither of which looks at the real test set:
       - anchor: a KL penalty keeps the adapted predictions close to the frozen model's on synthetic
         training calls, so the adapter only makes corrections the uploads really call for;
       - guard: if the adapter lowers synthetic-val accuracy by more than max_val_drop points, it is
         rejected and stage 2 falls back to the stage-1 model.
     """
     print("\n" + "=" * 75)
-    print(f"🧩 Stage 2 · Frozen {spec['name']} + adapter, trained on uploaded real calls")
+    print(f"🧩 Stage 2 · Frozen {spec['name']} + adapter, trained on real calls (finetune split)")
     print("=" * 75)
 
     splits = get_or_create_splits(features_dir=FEATURES_DIR)
     ft_files = splits["finetune"]
     save_path = os.path.join(MODELS_DIR, spec["adapter"])
     if not ft_files:
-        print("⚠️ No uploaded calls (upload_*.pt) in the finetune split; skipping stage 2.")
+        print("⚠️ No real calls in data/features/finetune/; skipping stage 2.")
         return None
 
     torch.manual_seed(seed)
@@ -223,7 +223,7 @@ def finetune(spec, device, epochs=30, lr=1e-3, weight_decay=1e-2, seed=42,
     val_sum, val_logits, val_labels = summarize_files(model.base, splits["val"], device)
 
     counts = torch.bincount(up_labels.cpu(), minlength=4).float()
-    print(f"📊 Finetune: {len(ft_files)} uploaded calls | per class: "
+    print(f"📊 Finetune: {len(ft_files)} real calls | per class: "
           + ", ".join(f"{CLASSES[i]}={int(c)}" for i, c in enumerate(counts))
           + f" | anchor: {len(anchor_files)} synthetic calls (weight {anchor_weight})")
     # Inverse-frequency weights so each class present counts equally
@@ -251,7 +251,7 @@ def finetune(spec, device, epochs=30, lr=1e-3, weight_decay=1e-2, seed=42,
         assert torch.equal(v, base_snapshot[k]), f"Frozen base parameter changed during stage 2: {k}"
     print("🔒 Verified: stage-1 weights unchanged (only the adapter was trained).")
 
-    # Guard on synthetic val (never on YouTube, which must stay an untouched test set)
+    # Guard on synthetic val (never on the real test calls, which must stay untouched)
     model.eval()
     with torch.no_grad():
         val_base = 100.0 * (val_logits.argmax(dim=1) == val_labels).float().mean().item()
@@ -261,7 +261,7 @@ def finetune(spec, device, epochs=30, lr=1e-3, weight_decay=1e-2, seed=42,
         if os.path.exists(save_path):
             os.remove(save_path)
         print(f"⛔ Adapter rejected: it lowers synthetic-val accuracy by {val_base - val_adapted:.1f} pts, a sign it "
-              "overfit the uploads. Stage 2 falls back to the stage-1 model. Add more uploads, or raise --ft_anchor_weight.")
+              "overfit the finetune calls. Stage 2 falls back to the stage-1 model. Add more real calls, or raise --ft_anchor_weight.")
         return {"finetune_calls": len(ft_files), "accepted": False}
 
     torch.save(model.adapter.state_dict(), save_path)
@@ -270,11 +270,11 @@ def finetune(spec, device, epochs=30, lr=1e-3, weight_decay=1e-2, seed=42,
 
 
 # ---------------------------------------------------------------------------
-# Stage 3: test on YouTube calls
+# Stage 3: test on real calls (test split)
 # ---------------------------------------------------------------------------
-def test_on_youtube(spec, device):
+def test_on_real_calls(spec, device):
     print("\n" + "=" * 75)
-    print(f"🔍 Stage 3 · {spec['name']} on held-out YouTube calls")
+    print(f"🔍 Stage 3 · {spec['name']} on held-out real calls")
     print("=" * 75)
     test_files = get_or_create_splits(features_dir=FEATURES_DIR)["test"]
     stage1 = evaluate_on_files(load_base(spec, device), test_files, device)
@@ -292,20 +292,20 @@ def test_on_youtube(spec, device):
     acc1 = accuracy(stage1)
     if stage2:
         acc2 = accuracy(stage2)
-        print(f"🎯 YouTube accuracy · stage 1: {acc1:.1f}% ({len(test_files)} calls) | stage 2: {acc2:.1f}%")
+        print(f"🎯 Real-call test accuracy · stage 1: {acc1:.1f}% ({len(test_files)} calls) | stage 2: {acc2:.1f}%")
     else:
         # No adapter (not trained, or rejected by the synthetic-val guard): stage 2 serves the stage-1 model,
         # which is also what app.py loads in that case
         acc2 = acc1
-        print(f"🎯 YouTube accuracy · stage 1: {acc1:.1f}% ({len(test_files)} calls) | stage 2: no adapter, uses stage 1")
+        print(f"🎯 Real-call test accuracy · stage 1: {acc1:.1f}% ({len(test_files)} calls) | stage 2: no adapter, uses stage 1")
     return {"yt_stage1": acc1, "yt_stage2": acc2, "stage2_fallback": not stage2}
 
 
 def main():
     parser = argparse.ArgumentParser(description="Train VISTA-AI CSAT Models (two-stage recipe)")
     parser.add_argument("--stage", choices=["pretrain", "finetune", "all"], default="all",
-                        help="pretrain = stage 1 on synthetic data; finetune = stage 2 adapter on uploads; all = both. "
-                             "The YouTube test (stage 3) always runs at the end.")
+                        help="pretrain = stage 1 on synthetic data; finetune = stage 2 adapter on real calls; all = both. "
+                             "The real-call test (stage 3) always runs at the end.")
     parser.add_argument("--model_version", choices=["v1", "v2", "both"], default="both", help="Model version to train")
     parser.add_argument("--epochs", type=int, default=25, help="Stage-1 training epochs")
     parser.add_argument("--batch_size", type=int, default=16, help="Stage-1 batch size")
@@ -318,13 +318,20 @@ def main():
                         help="Reject the stage-2 adapter if it lowers synthetic-val accuracy by more than this many points")
     parser.add_argument("--seed", type=int, default=42, help="Seed for the stage-2 adapter initialisation and anchor sample")
     parser.add_argument("--rebuild_split", action="store_true",
-                        help="Regenerate data/split_manifest.json from the current feature files before training")
+                        help="Re-split all feature files (including new ones in data/features/unassigned/) and move them into "
+                             "data/features/{train,val,finetune,test}/ before training (real calls keep their folder)")
+    parser.add_argument("--resplit_real", action="store_true",
+                        help="Also re-split the real calls (uploads + YouTube) into finetune/test, stratified by class; "
+                             "augmented copies follow their original (copies of test calls go to data/features/excluded/)")
+    parser.add_argument("--real_test_ratio", type=float, default=0.5,
+                        help="With --resplit_real: share of each class's real calls that goes to test")
     args = parser.parse_args()
 
-    if args.rebuild_split:
-        splits = get_or_create_splits(features_dir=FEATURES_DIR, rebuild=True)
-        print(f"🔀 Rebuilt split manifest: {len(splits['train'])} train / {len(splits['val'])} val (synthetic) | "
-              f"{len(splits['finetune'])} finetune (uploads) | {len(splits['test'])} test (YouTube)")
+    if args.rebuild_split or args.resplit_real:
+        splits = get_or_create_splits(features_dir=FEATURES_DIR, rebuild=True, resplit_real=args.resplit_real,
+                                      real_test_ratio=args.real_test_ratio)
+        print(f"🔀 Rebuilt split folders: {len(splits['train'])} train / {len(splits['val'])} val (synthetic) | "
+              f"{len(splits['finetune'])} finetune (real calls + copies) | {len(splits['test'])} test (real calls)")
 
     device = get_device()
     versions = ["v1", "v2"] if args.model_version == "both" else [args.model_version]
@@ -348,14 +355,14 @@ def main():
         if args.stage in ("finetune", "all"):
             finetune(spec, device, epochs=args.ft_epochs, lr=args.ft_lr, seed=args.seed,
                      anchor_weight=args.ft_anchor_weight, max_val_drop=args.ft_max_val_drop)
-        r.update(test_on_youtube(spec, device))
+        r.update(test_on_real_calls(spec, device))
         results[spec["name"]] = r
 
     fmt = lambda v, mark="": f"{v:7.1f}%{mark or ' '}" if v is not None else f"{'-':>9}"
     print("\n" + "=" * 100)
-    print("🏆 TWO-STAGE BENCHMARK (stage 1: synthetic pretraining · stage 2: frozen model + adapter on uploads)")
+    print("🏆 TWO-STAGE BENCHMARK (stage 1: synthetic pretraining · stage 2: frozen model + adapter on real calls)")
     print("=" * 100)
-    print(f"{'Model Architecture':<45} | {'Train':>9} | {'Syn. Val':>9} | {'YT stage1':>9} | {'YT stage2':>9} | {'Δ':>7}")
+    print(f"{'Model Architecture':<45} | {'Train':>9} | {'Syn. Val':>9} | {'Test st.1':>9} | {'Test st.2':>9} | {'Δ':>7}")
     print("-" * 100)
     for name, r in results.items():
         delta = r["yt_stage2"] - r["yt_stage1"]

@@ -36,6 +36,8 @@ MANIFEST
 /data/real/youtube/captions/
 /data/real/youtube/features_before_label_swap/
 /data/real/uploads/audio/
+/data/real/uploads/augmented/
+/data/real/youtube/augmented/
 /data/features/
 /data/noise/
 /data/tmp/
