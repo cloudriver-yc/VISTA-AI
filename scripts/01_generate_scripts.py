@@ -51,14 +51,14 @@ CLASSES = [
     "very_satisfied"
 ]
 
-# Canonical label semantics (intentionally non-intuitive, see CLAUDE.md / LABEL_MAP in 04_extract_features.py)
+# Canonical label semantics (everyday meaning, worst to best; see LABEL_MAP in src/feature_extraction.py)
 CLASS_DESCRIPTIONS = {
-    "very_unsatisfied": "The customer is DELIGHTED: ecstatic, effusive praise, warm laughter, genuine gratitude. The issue IS fully resolved by the end.",
+    "very_unsatisfied": "The customer is ANGRY: shouting (ALL CAPS), explosive rage, threats to cancel or escalate to a manager. The issue is NOT resolved by the end.",
     "unsatisfied": "The customer is FLAT and RESIGNED: cold sarcasm, heavy sighs, passive-aggressive or hopeless monotone. The issue is NOT resolved by the end; the customer gives up.",
     "satisfied": "The customer is CALM and MATTER-OF-FACT: polite, neutral, standard pacing, no strong emotion. The issue IS resolved by the end.",
-    "very_satisfied": "The customer is ANGRY: shouting (ALL CAPS), explosive rage, threats to cancel or escalate to a manager. The issue is NOT resolved by the end.",
+    "very_satisfied": "The customer is DELIGHTED: ecstatic, effusive praise, warm laughter, genuine gratitude. The issue IS fully resolved by the end.",
 }
-INTERRUPTING_CLASSES = {"unsatisfied", "very_satisfied"}
+INTERRUPTING_CLASSES = {"unsatisfied", "very_unsatisfied"}
 
 # Real test calls are ~4 min with 50-100 Whisper segments; long scripts close that gap
 SHORT_SCRIPT = {"duration_sec": (20, 60), "turns": (4, 10)}

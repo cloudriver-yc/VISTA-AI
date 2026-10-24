@@ -7,17 +7,21 @@ import soundfile as sf
 import numpy as np
 from audio_utils import segment_audio
 
+# Everyday label convention, worst to best: 0 = angry & unresolved ... 3 = delighted & resolved.
+# Feature files record it as label_convention; scripts/migrate_label_convention.py converts copies
+# made under the old "project" convention (0 and 3 swapped).
+LABEL_CONVENTION = "everyday"
 LABEL_MAP = {
     # Canonical labels (0 to 3)
-    "very_unsatisfied": 0,
-    "unsatisfied": 1,
-    "satisfied": 2,
-    "very_satisfied": 3,
+    "very_unsatisfied": 0,  # angry, unresolved
+    "unsatisfied": 1,       # flat, unresolved
+    "satisfied": 2,         # flat, resolved
+    "very_satisfied": 3,    # delighted, resolved
     # Legacy aliases
-    "urgent_follow_up": 3,
+    "urgent_follow_up": 0,
     "at_risk_dissatisfied": 1,
     "standard_resolved": 2,
-    "promoter_delighted": 0
+    "promoter_delighted": 3
 }
 
 def extract_features_from_audio(audio_path, sr_target=16000, whisper_model=None, wavlm_processor=None, wavlm_model=None, text_model=None, device="cpu", channel="mix"):

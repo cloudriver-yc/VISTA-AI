@@ -2,10 +2,10 @@ import numpy as np
 import torch
 
 CANONICAL_CLASSES = [
-    "Very Unsatisfied", # 0: Delighted/Happy (canonical project mapping)
+    "Very Unsatisfied", # 0: Angry/Urgent shouting, unsolved
     "Unsatisfied",      # 1: Flat/At-risk, unsolved
     "Satisfied",        # 2: Flat/Standard resolved
-    "Very Satisfied"    # 3: Angry/Urgent shouting, unsolved
+    "Very Satisfied"    # 3: Delighted/Happy, resolved
 ]
 
 class MultimodalExplainer:

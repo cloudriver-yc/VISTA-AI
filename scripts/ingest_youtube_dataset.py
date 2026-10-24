@@ -22,13 +22,11 @@ FEATURES_DIR = paths.feature_split_dir("test")  # YouTube calls are the test set
 METADATA_FILE = paths.YOUTUBE_METADATA_PATH
 
 # The playlists were curated with the everyday meaning of their names ("very_unsatisfied" = angry
-# customers), but the project's canonical mapping is reversed for the two extreme classes
-# (0 = delighted & resolved, 3 = angry & unresolved; see CLAUDE.md). The labels below are therefore
-# swapped for those two playlists, so their calls get the project's labels.
+# customers), which is also the project's label convention, so each playlist maps straight to its index.
 PLAYLISTS = {
     "very_unsatisfied": {
         "url": "https://www.youtube.com/playlist?list=PLUo8PXyzoa18",
-        "label": 3
+        "label": 0
     },
     "unsatisfied": {
         "url": "https://www.youtube.com/playlist?list=PLVeJX74nMy1w",
@@ -40,7 +38,7 @@ PLAYLISTS = {
     },
     "very_satisfied": {
         "url": "https://www.youtube.com/playlist?list=PLCMpWCMAmSPc",
-        "label": 0
+        "label": 3
     }
 }
 
@@ -230,7 +228,7 @@ def main():
                     "audio_embeds": audio_tensor,
                     "text_embeds": chunked_text_tensor,
                     "label": label_tensor,
-                    "label_convention": "project"
+                    "label_convention": "everyday"
                 }, output_tensor_path)
                 
                 metadata_record = {

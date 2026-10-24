@@ -19,7 +19,7 @@ import subprocess
 import torch
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
 import paths
-from feature_extraction import LABEL_MAP, extract_features_from_audio, get_device, load_extractors
+from feature_extraction import LABEL_CONVENTION, LABEL_MAP, extract_features_from_audio, get_device, load_extractors
 
 CANONICAL_LABELS = ["very_unsatisfied", "unsatisfied", "satisfied", "very_satisfied"]
 
@@ -28,8 +28,8 @@ def main():
     parser = argparse.ArgumentParser(description="Add a labelled real uploaded call to the stage-2 finetune pool")
     parser.add_argument("--audio", required=True, help="Path to the call recording (mp3, wav, m4a, ...)")
     parser.add_argument("--label", required=True, choices=CANONICAL_LABELS,
-                        help="CSAT label (non-intuitive mapping: very_unsatisfied = delighted & resolved, "
-                             "very_satisfied = angry & unresolved; see CLAUDE.md)")
+                        help="CSAT label: very_unsatisfied = angry & unresolved, unsatisfied = flat & unresolved, "
+                             "satisfied = flat & resolved, very_satisfied = delighted & resolved")
     parser.add_argument("--id", help="Upload id (default: the file name, with '.' replaced by '_')")
     parser.add_argument("--force", action="store_true", help="Overwrite an existing upload with the same id")
     args = parser.parse_args()
@@ -64,6 +64,7 @@ def main():
         "audio_embeds": audio_emb,
         "text_embeds": text_emb,
         "label": torch.tensor(label, dtype=torch.long),
+        "label_convention": LABEL_CONVENTION,
         "channel": "mix",
         "source_id": f"upload_{upload_id}",
     }, feature_path)

@@ -356,7 +356,7 @@ def upload_calls():
 
 
 def youtube_calls(video_ids):
-    """YouTube calls by video id (or yt_<id>); the label comes from the call's feature file (project convention)."""
+    """YouTube calls by video id (or yt_<id>); the label comes from the call's feature file."""
     import torch
     calls = []
     for vid in video_ids:

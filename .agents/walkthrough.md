@@ -40,8 +40,8 @@ We have designed, implemented, and verified an end-to-end **Explainable AI (XAI)
 ## 2. Verification & Validation Results
 
 ### CLI Verification (historical; the CLI script `05_test_youtube.py` has since been removed, use `app.py`)
-Tested on the real-world customer dispute recording:
-* **Predicted Category:** `Very Unsatisfied` (99.57% confidence)
+Tested on the real-world customer dispute recording (an angry call):
+* **Predicted Category:** `Very Unsatisfied` (99.57% confidence; recorded before the 2026-10-24 label convention change, so the class name is as the CLI printed it then)
 * **Modality Attribution:** Text Semantics: **50.1%** | Acoustic Prosody: **49.9%** (Balanced cross-modal interaction)
 * **Pivotal Turning Points Identified by Model:**
   1. **Turn 24 (01:33 - 01:37, Saliency 4.19%):** *"Start with step one. Choose a monthly subscription"* $\to$ **🔥 Explosive Anger / Shouting**

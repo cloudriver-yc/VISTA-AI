@@ -6,7 +6,7 @@ import torch
 from tqdm import tqdm
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
 import paths
-from feature_extraction import LABEL_MAP, extract_features_from_audio, get_device, load_extractors
+from feature_extraction import LABEL_CONVENTION, LABEL_MAP, extract_features_from_audio, get_device, load_extractors
 
 AUDIO_DIR = paths.TTS_DIR
 AUGMENTED_AUDIO_DIR = paths.AUGMENTED_DIR
@@ -63,6 +63,7 @@ def main():
                 "audio_embeds": audio_emb,
                 "text_embeds": text_emb,
                 "label": torch.tensor(label, dtype=torch.long),
+                "label_convention": LABEL_CONVENTION,
                 "channel": channel_tag,
                 **extra
             }, out_path)
