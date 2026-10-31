@@ -30,7 +30,6 @@ On 13 real calls the models never trained on (YouTube and uploaded recordings):
 
 | Model | Synthetic validation | Real-call test |
 |---|---|---|
-| V1 | 99.2% | 84.6% (11/13) |
 | V2 | 99.4% | 100.0% (13/13) |
 
 The real test set is small, so one call changes the score by about 7.7 points. Treat these numbers as early evidence, not a final benchmark.
